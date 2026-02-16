@@ -1,0 +1,76 @@
+//Y123456 JOB TN10005K,KPTPF009,
+//         CLASS=U,SCHENV=BATCHaPKZIP,
+//         MSGCLASS=C,
+//         COND=((07,EQ),(32,EQ),(4095,EQ)),
+//         MSGLEVEL=(1,1),NOTIFY=&SYSUID
+//*--------------------------------------------------*
+//* VARIABLES
+//*--------------------------------------------------*
+// SET DATEJR=100226,
+//     DATEJ8=20190210,
+//     DST=009,
+//     FIC=DPR,
+//     IXPX=IXPK
+//*--------------------------------------------------*
+//* STEP 1 : CREATION DE LA SYSIN DB2
+//*--------------------------------------------------*
+//UTSY11A1 EXEC PGM=SY00011,
+//         PARM=('&IXPX,&DATEJ8')
+//
+//DD00011A DD DISP=SHR,
+//            DSN=DEPANHOM.IXP.DATATEST(PTPF009A)
+//
+//DD00011SS DD DISP=(NEW,CATLG,DELETE),
+//             DSN=DA.KPTPFACT.UTSY11A1.&FIC..D&DATEJR,
+//             SPACE=(TRK,(1,1),RLSE),
+//             MGMTCLAS=MA0010
+//
+//SYSOUT   DD SYSOUT=*
+//CEEDUMP  DD SYSOUT=E
+//*--------------------------------------------------*
+//* STEP 2 : DECHARGEMENT DES DONNEES IMEX (DSNTIAUL)
+//*--------------------------------------------------*
+//UTIKJE01 EXEC PGM=SY00100A,
+//         PARM=(07,IKJEFT1B)
+//
+//SYSIN    DD DISP=SHR,
+//            DSN=DA.KPTPFACT.UTSY11A1.&FIC..D&DATEJR
+//
+//SYSTSIN  DD DISP=SHR,
+//            DSN=TIG1.KLIB2(DBG0IAUP)
+//
+//SYSREC00 DD DISP=(NEW,CATLG,DELETE),
+//            DSN=DA.KPTPFACT.UTIKJE01.&FIC..D&DATEJR,
+//            RECFM=VB,
+//            LRECL=32756,
+//            BLKSIZE=0,
+//            SPACE=(CYL,(266,266),RLSE),
+//            MGMTCLAS=MA0060
+//
+//SYSTSPRT DD SYSOUT=*
+//SGOUT    DD SYSOUT=*
+//SYSPRINT DD SYSOUT=*
+//SYSPUNCH DD DUMMY
+//*--------------------------------------------------*
+//* STEP 3 : FORMATAGE DU FICHIER IMEX
+//*--------------------------------------------------*
+//UTSORTA1 EXEC PGM=SORT
+//
+//SORTIN   DD DISP=SHR,
+//            DSN=DA.KPTPFACT.UTIKJE01.&FIC..D&DATEJR
+//
+//SYSIN    DD DISP=SHR,
+//            DSN=TIG1.LIBKLI(PTPF&DST.A)
+//
+//SYMNAMES DD DISP=SHR,
+//            DSN=TIG1.LIBKLI(PTPF&DST.B)
+//
+//SORTOUT  DD DISP=(NEW,CATLG,DELETE),
+//            DSN=DA.KPTPFACT.UTSORTA1.&FIC..D&DATEJR,
+//            RECFM=VB,
+//            LRECL=32756,
+//            BLKSIZE=0,
+//            SPACE=(CYL,(266,266),RLSE),
+//            MGMTCLAS=MA0060
+//
+//SYSOUT   DD SYSOUT=*
