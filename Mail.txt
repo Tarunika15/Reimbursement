@@ -1,0 +1,55 @@
+Thank you for your suggestions and for taking the time to think through the possible options. We have actually been investigating several of these approaches on the mainframe side during the last few days, and I would like to summarize what has already been tested and the constraints we encountered.
+
+1. Mainframe JCL / DB2 UNLOAD approach
+
+We investigated whether the DB2 unload process could bypass the implicit conversion to EBCDIC. For this purpose, we tested the DB2 utility DSNUTILB (instead of the current DSNTIAUL utility), as DSNUTILB can in some environments unload Unicode data directly.
+
+However, in our environment we encountered the following limitations:
+
+The utility level available in our subsystem does not support newer options such as FORMAT DELIMITED or ENCODING UNICODE.
+
+DSNUTILB produces data in the internal DB2 unload format, which is not human-readable and not compatible with the current SORT formatting process.
+
+Our extraction logic relies on a complex SQL query (joins and CTE), and DSNUTILB cannot execute such queries directly — it only supports unloading full tables.
+
+Because of these constraints, DSNUTILB cannot replace the current DSNTIAUL process for this use case.
+
+2. COBOL program approach
+
+We also considered the possibility of writing a COBOL program to read the data and generate the CSV output directly in UTF-8.
+
+While technically feasible, this would require:
+
+developing and maintaining a dedicated COBOL extraction program,
+
+implementing DB2 cursor logic,
+
+handling encoding and CSV formatting manually.
+
+Given that this job is currently implemented using standard DB2 utilities, replacing it with a custom program would introduce significant additional complexity and maintenance overhead.
+
+3. INGaaS ingestion engine
+
+From the mainframe side we do not have visibility into INGaaS configuration options, but if an alternative ingestion engine can handle binary or encoded values differently, it may be worth exploring. However, this would still depend on how the source data is transported from the mainframe.
+
+4. Java intermediary component
+
+This would also be technically possible (receive encoded data, convert it, then forward to INGaaS), but it introduces an additional processing component in the pipeline and operational overhead.
+
+Current working solution
+
+The only solution that consistently works within the constraints of the mainframe environment is to export the affected UTF-8 columns using the DB2 HEX() function. This ensures that:
+
+the original UTF-8 byte sequence is preserved,
+
+no conversion to EBCDIC occurs during the unload process,
+
+the dataset remains stable and compatible with the existing utilities.
+
+The downstream system can then decode the hexadecimal representation back into UTF-8 characters.
+
+This approach guarantees that no data corruption occurs during extraction.
+
+Of course, if the DB2 DBA team identifies a supported way to perform a true UTF-8 unload with the utilities available in our subsystem, we would be happy to explore that option further.
+
+Please let me know if you would like us to run additional tests from the mainframe side.
