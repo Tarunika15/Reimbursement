@@ -1,0 +1,84 @@
+Hi Team,
+
+I hope you are doing well.
+
+As part of our investigation into handling datasets containing Chinese characters, we have explored multiple approaches on the mainframe side using COBOL and JCL utilities. Below is a consolidated summary of all the approaches we have attempted so far:
+
+1. COBOL-Based Approaches
+
+Program: DPTPT.PTP.CHN.SRC(PTPONEWT)
+
+We attempted several variations within the COBOL program across multiple runs, including:
+
+Using ICONV for character conversion → did not work as expected
+Casting data using VARCHAR → did not resolve encoding issues
+Defining output file with CCSID → did not produce correct readable output
+
+Despite multiple iterations and logic changes, we were unable to reliably extract Chinese characters in the expected format.
+
+2. DB2 UNLOAD Utility (DSNUTILB)
+
+The UNLOAD utility was able to extract Chinese data in UTF-8 format successfully
+However, it has a key limitation:
+We are unable to use complex SELECT queries or extract specific columns as required by the business logic
+
+This makes it unsuitable for our use case where query-level filtering and joins are required.
+
+3. IKJEFT (UNLOAD Execution)
+
+Program: DPTPT.PTP.SRC(UNLTEST)
+
+Attempted to execute UNLOAD via IKJEFT
+Encountered error:
+RACF PRODUCT DISABLED: COMMAND ENDED
+
+This indicates restrictions at the system/security level, preventing further use of this approach.
+
+4. DB2TEP2 Approach
+
+Program: DPTPT.PTP.SRC(TESTTP2)
+
+Attempted data extraction using DB2TEP2
+Encountered error:
+SQLCODE -927 (authorization/system-related issue)
+
+This prevented successful execution of the unload/query.
+
+5. Additional Observations
+
+We also explored multiple SQL-level approaches such as:
+CAST operations
+Encoding adjustments
+These did not resolve the issue of correctly handling Chinese characters end-to-end within the current mainframe-based pipeline
+
+6. INGaaS Constraint
+
+From discussions with the INGaaS team:
+
+The current ingestion engine does not support UNHEX processing for EBCDIC files
+Any enhancement in this area would require changes on their side
+7. Proposed Solution – Java-Based Approach
+
+Given the above limitations, we have implemented a Proof of Concept using a Java-based microservice.
+
+Approach:
+
+Directly connect to DB2 from Java (bypassing mainframe file conversions)
+Execute the required complex SQL query (including joins and filters)
+Retrieve data in UTF-8 format (native support in Java)
+Generate output as a pipe-delimited (|) CSV file
+Ensure Chinese characters are preserved correctly without encoding issues
+
+Current Status:
+
+POC is successfully implemented and tested
+Chinese characters are correctly retrieved and written to the output file
+Business logic (including filtering conditions such as 7-year criteria) is fully supported
+8. Next Steps
+Integrate the generated CSV file with INGaaS ingestion pipeline
+Finalize ingestion mechanism (API / SFTP / pipeline trigger)
+Validate end-to-end data flow into Data Lake
+
+Given the repeated limitations encountered with COBOL/JCL-based approaches and the successful validation of the Java-based solution, we propose proceeding with the Java approach for the two datasets containing Chinese characters.
+
+Please let us know if you need any additional details or a walkthrough of the implemented solution.
