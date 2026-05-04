@@ -1,0 +1,210 @@
+-- ============================================================
+-- PURPOSE:
+-- Commission Received in FCY - FULL IMPLEMENTATION
+-- Based on Excel Logic (QUERY1 + QUERY2 + All Derived Fields)
+-- ============================================================
+
+WITH 
+
+-- ============================================================
+-- QUERY1: Commission Charges
+-- ============================================================
+Q1 AS (
+    SELECT 
+        C.DEAL_NO,
+        C.CHG_SERIAL_NO,
+        C.STEP_ID,
+        S.ACTUAL_REL_DATE
+    FROM IXQDBCHG C
+    INNER JOIN IXQDBSTP S 
+        ON C.STEP_ID = S.STEP_ID
+    WHERE C.CHARGE_ID = 800200
+),
+
+-- ============================================================
+-- QUERY2: Final Base Dataset
+-- ============================================================
+Q2 AS (
+    SELECT 
+        C.DEAL_NO,
+        C.VAT_SERIAL_NO,
+        C.STEP_ID,
+        C.CHARGE_ID,
+        C.REFUND_IND,
+        C.ENTITY,
+        C.DEAL_CURR,
+        C.DR_CALC_CURR,
+        C.CR_CALC_CURR,
+        C.DR_LOC_EXCH_RATE
+    FROM IXQDBCHG C
+),
+
+-- ============================================================
+-- BASE JOIN
+-- ============================================================
+BASE AS (
+    SELECT 
+        Q2.*,
+        Q1.CHG_SERIAL_NO,
+        Q1.ACTUAL_REL_DATE
+    FROM Q1
+    INNER JOIN Q2
+        ON Q1.DEAL_NO = Q2.DEAL_NO
+        AND Q1.CHG_SERIAL_NO = Q2.VAT_SERIAL_NO
+)
+
+-- ============================================================
+-- FINAL SELECT (ALL FIELDS)
+-- ============================================================
+SELECT 
+
+    -- 1. VATRefID
+    BASE.DEAL_NO || BASE.VAT_SERIAL_NO AS VAT_REF_ID,
+
+    -- 2. VATGenDate
+    BASE.ACTUAL_REL_DATE AS VAT_GEN_DATE,
+
+    -- 3. DealID
+    CASE 
+        WHEN SUBSTR(BASE.DEAL_NO,1,3) = '860' THEN BASE.DEAL_NO || 'BEI'
+        WHEN SUBSTR(BASE.DEAL_NO,1,3) = '870' THEN BASE.DEAL_NO || 'SHA'
+        WHEN SUBSTR(BASE.DEAL_NO,1,3) = '880' THEN BASE.DEAL_NO || 'GUA'
+    END AS DEAL_ID,
+
+    -- 4. DealTransDate
+    BASE.ACTUAL_REL_DATE,
+
+    -- 5. DealAccountingDate
+    BASE.ACTUAL_REL_DATE,
+
+    -- ========================================================
+    -- 6. Reverse Flag
+    -- ========================================================
+    CASE 
+        WHEN BASE.REFUND_IND = 'Y' THEN 'TRUE'
+        WHEN BASE.CHARGE_ID = '800026' THEN 'TRUE'
+        ELSE 'FALSE'
+    END AS REVERSE,
+
+    -- ========================================================
+    -- 7. OriginalVATRefID
+    -- ========================================================
+    CASE 
+        WHEN BASE.REFUND_IND = 'Y' THEN 
+            BASE.DEAL_NO || 
+            (SELECT REF_STEP_ID 
+             FROM IXQDBSTP S 
+             WHERE S.DEAL_NO = BASE.DEAL_NO 
+             FETCH FIRST 1 ROW ONLY)
+            || BASE.VAT_SERIAL_NO
+
+        WHEN BASE.CHARGE_ID = '800026' THEN 
+            BASE.DEAL_NO || 
+            (SELECT REF_STEP_ID 
+             FROM IXQDBSTP S 
+             WHERE S.DEAL_NO = BASE.DEAL_NO 
+             FETCH FIRST 1 ROW ONLY)
+            || BASE.VAT_SERIAL_NO
+
+        ELSE NULL
+    END AS ORIGINAL_VAT_REF_ID,
+
+    -- ========================================================
+    -- 8. VAT Rate
+    -- ========================================================
+    (SELECT FIXED_PERCENT 
+     FROM IXQDBCCM 
+     WHERE ENTITY = '022' 
+     AND COMM_ID = '800200'
+     FETCH FIRST 1 ROW ONLY) AS VAT_RATE,
+
+    -- ========================================================
+    -- 9. Original Currency
+    -- ========================================================
+    CASE 
+        WHEN BASE.DR_CALC_CURR <> BASE.CR_CALC_CURR 
+             AND BASE.DEAL_CURR <> 'CNY' THEN BASE.DEAL_CURR
+        ELSE 'CNY'
+    END AS ORIGINAL_CURRENCY,
+
+    -- ========================================================
+    -- 10. Total Amount
+    -- ========================================================
+    (SELECT CHARGE_AMOUNT 
+     FROM IXQDBCHG 
+     WHERE ENTITY = '022' 
+       AND DEAL_NO = BASE.DEAL_NO 
+       AND CHARGE_ID = '802001'
+       AND CHARGE_WHEN = 'N'
+     FETCH FIRST 1 ROW ONLY) AS TOTAL_AMOUNT,
+
+    -- ========================================================
+    -- 11. Tax Amount
+    -- ========================================================
+    (SELECT CHARGE_AMOUNT 
+     FROM IXQDBCHG 
+     WHERE ENTITY = '022' 
+       AND DEAL_NO = BASE.DEAL_NO 
+       AND CHARGE_ID = '800200'
+     FETCH FIRST 1 ROW ONLY) AS TAX_AMOUNT,
+
+    -- ========================================================
+    -- 12. Amount After VAT
+    -- ========================================================
+    (
+      (SELECT CHARGE_AMOUNT FROM IXQDBCHG 
+        WHERE ENTITY = '022' AND DEAL_NO = BASE.DEAL_NO AND CHARGE_ID = '802001' FETCH FIRST 1 ROW ONLY)
+      -
+      (SELECT CHARGE_AMOUNT FROM IXQDBCHG 
+        WHERE ENTITY = '022' AND DEAL_NO = BASE.DEAL_NO AND CHARGE_ID = '800200' FETCH FIRST 1 ROW ONLY)
+    ) AS AMOUNT_AFTER_VAT,
+
+    -- ========================================================
+    -- 13. Target Currency
+    -- ========================================================
+    'CNY' AS TARGET_CURRENCY,
+
+    -- ========================================================
+    -- 14–16 Converted Values
+    -- ========================================================
+    (BASE.DR_LOC_EXCH_RATE *
+      (SELECT CHARGE_AMOUNT FROM IXQDBCHG 
+        WHERE ENTITY = '022' AND DEAL_NO = BASE.DEAL_NO AND CHARGE_ID = '802001' FETCH FIRST 1 ROW ONLY)
+    ) AS CONVERTED_TOTAL_AMOUNT,
+
+    (BASE.DR_LOC_EXCH_RATE *
+      (SELECT CHARGE_AMOUNT FROM IXQDBCHG 
+        WHERE ENTITY = '022' AND DEAL_NO = BASE.DEAL_NO AND CHARGE_ID = '800200' FETCH FIRST 1 ROW ONLY)
+    ) AS CONVERTED_TAX_AMOUNT,
+
+    (BASE.DR_LOC_EXCH_RATE *
+      (
+        (SELECT CHARGE_AMOUNT FROM IXQDBCHG WHERE ENTITY='022' AND DEAL_NO=BASE.DEAL_NO AND CHARGE_ID='802001' FETCH FIRST 1 ROW ONLY)
+        -
+        (SELECT CHARGE_AMOUNT FROM IXQDBCHG WHERE ENTITY='022' AND DEAL_NO=BASE.DEAL_NO AND CHARGE_ID='800200' FETCH FIRST 1 ROW ONLY)
+      )
+    ) AS CONVERTED_AMOUNT_AFTER_VAT,
+
+    -- ========================================================
+    -- 17. Convert Rate
+    -- ========================================================
+    BASE.DR_LOC_EXCH_RATE AS CONVERT_RATE,
+
+    -- ========================================================
+    -- 18. Revenue Type
+    -- ========================================================
+    (SELECT TCCFCODE 
+     FROM PTRS.PT0140V4 
+     FETCH FIRST 1 ROW ONLY) AS REVENUE_TYPE,
+
+    -- ========================================================
+    -- 19. Customer ID
+    -- ========================================================
+    CASE 
+        WHEN (SELECT LC_LG_TYPE FROM IXQDBICD WHERE ENTITY='022' FETCH FIRST 1 ROW ONLY) = 'GA'
+            THEN (SELECT CIF_ID FROM IXQDBICD WHERE ENTITY='022' FETCH FIRST 1 ROW ONLY)
+        ELSE 
+            (SELECT BIF_ID FROM IXQDBICD WHERE ENTITY='022' FETCH FIRST 1 ROW ONLY)
+    END AS CUSTOMER_ID
+
+FROM BASE;
