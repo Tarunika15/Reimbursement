@@ -1,0 +1,97 @@
+@Test
+void shouldGenerateParticipantsFileSuccessfully() {
+
+    ParticipantsRepository repository =
+            mock(ParticipantsRepository.class);
+
+    when(repository.fetch())
+            .thenReturn(
+                    List.of(createParticipantsRecord())
+            );
+
+    ParticipantsProcessor processor =
+            new ParticipantsProcessor(repository, 9850L);
+
+    String filePath = processor.process();
+
+    File file = new File(filePath);
+
+    assertTrue(file.exists());
+    assertTrue(file.length() > 0);
+}
+
+private ParticipantsRecord createParticipantsRecord() {
+
+    ParticipantsRecord record = new ParticipantsRecord();
+
+    record.setEntity("SG");
+    record.setDealNo("D001");
+    record.setPartyCode("P001");
+    record.setPartyId("PTY001");
+    record.setCreateStepId("STEP001");
+    record.setPartyExt("EXT001");
+    record.setPartyName("Party Name");
+    record.setPartyAddress("Party Address");
+    record.setStepId("STP001");
+    record.setWithinGroup("Y");
+    record.setCountryCode("IND");
+
+    return record;
+}
+
+@Test
+void shouldGenerateAdditionalFieldsFileSuccessfully() {
+
+    AdditionalFieldsRepository repository =
+            mock(AdditionalFieldsRepository.class);
+
+    when(repository.fetch())
+            .thenReturn(
+                    List.of(createAdditionalFieldsRecord())
+            );
+
+    AdditionalFieldsProcessor processor =
+            new AdditionalFieldsProcessor(repository, 9855L);
+
+    String filePath = processor.process();
+
+    File file = new File(filePath);
+
+    assertTrue(file.exists());
+    assertTrue(file.length() > 0);
+}
+
+private AdditionalFieldsRecord createAdditionalFieldsRecord() {
+
+    AdditionalFieldsRecord record =
+            new AdditionalFieldsRecord();
+
+    record.setEntity("SG");
+    record.setDealNo("D001");
+    record.setStepId("STEP001");
+    record.setRowNo(1);
+
+    record.setDataCode("DATA001");
+    record.setDataDesc("DATA DESC");
+
+    record.setDocTypeCode("DOC001");
+    record.setDocDesc("DOC DESC");
+
+    record.setDocNo("DOCNO001");
+    record.setCurr("USD");
+
+    record.setAmount(new BigDecimal("100.50"));
+
+    record.setValueCode("VAL001");
+    record.setValueDesc("VALUE DESC");
+
+    record.setDate1(20260429);
+
+    record.setRemarks("Remarks");
+
+    record.setLastUpdateDate(20260429);
+    record.setLastUpdateStepId("STEP002");
+    record.setLastUpdateUser("USER001");
+
+    return record;
+}
