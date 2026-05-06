@@ -1,0 +1,218 @@
+package com.sg.trade.asia.domain.processor;
+
+import com.sg.trade.asia.domain.model.ParticipantsRecord;
+import com.sg.trade.asia.infrastructure.repository.ParticipantsRepository;
+import org.junit.jupiter.api.Test;
+
+import java.io.File;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class ParticipantsProcessorTest {
+
+    @Test
+    void shouldReturnCorrectDatasetName() {
+
+        ParticipantsRepository repository =
+                mock(ParticipantsRepository.class);
+
+        ParticipantsProcessor processor =
+                new ParticipantsProcessor(repository, 9850L);
+
+        assertEquals(
+                "participants",
+                processor.getName()
+        );
+    }
+
+    @Test
+    void shouldReturnCorrectIngestionId() {
+
+        ParticipantsRepository repository =
+                mock(ParticipantsRepository.class);
+
+        ParticipantsProcessor processor =
+                new ParticipantsProcessor(repository, 9850L);
+
+        assertEquals(
+                9850L,
+                processor.getIngestionId()
+        );
+    }
+
+    @Test
+    void shouldGenerateParticipantsFileSuccessfully() {
+
+        ParticipantsRepository repository =
+                mock(ParticipantsRepository.class);
+
+        when(repository.fetch())
+                .thenReturn(
+                        List.of(
+                                new ParticipantsRecord(
+                                        "SG",
+                                        "D001",
+                                        "P001",
+                                        "PTY001",
+                                        "STEP001",
+                                        "EXT001",
+                                        "Party Name",
+                                        "Party Address",
+                                        "STP001",
+                                        "Y",
+                                        "IND"
+                                )
+                        )
+                );
+
+        ParticipantsProcessor processor =
+                new ParticipantsProcessor(repository, 9850L);
+
+        String filePath = processor.process();
+
+        File file = new File(filePath);
+
+        assertTrue(file.exists());
+        assertTrue(file.length() > 0);
+    }
+
+    @Test
+    void shouldThrowExceptionWhenRepositoryFails() {
+
+        ParticipantsRepository repository =
+                mock(ParticipantsRepository.class);
+
+        when(repository.fetch())
+                .thenThrow(new RuntimeException("DB failure"));
+
+        ParticipantsProcessor processor =
+                new ParticipantsProcessor(repository, 9850L);
+
+        RuntimeException exception =
+                assertThrows(
+                        RuntimeException.class,
+                        processor::process
+                );
+
+        assertTrue(
+                exception.getMessage()
+                        .contains("Failed to process participants data")
+        );
+    }
+}
+
+
+package com.sg.trade.asia.domain.processor;
+
+import com.sg.trade.asia.domain.model.AdditionalFieldsRecord;
+import com.sg.trade.asia.infrastructure.repository.AdditionalFieldsRepository;
+import org.junit.jupiter.api.Test;
+
+import java.io.File;
+import java.math.BigDecimal;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class AdditionalFieldsProcessorTest {
+
+    @Test
+    void shouldReturnCorrectDatasetName() {
+
+        AdditionalFieldsRepository repository =
+                mock(AdditionalFieldsRepository.class);
+
+        AdditionalFieldsProcessor processor =
+                new AdditionalFieldsProcessor(repository, 9855L);
+
+        assertEquals(
+                "additional_fields",
+                processor.getName()
+        );
+    }
+
+    @Test
+    void shouldReturnCorrectIngestionId() {
+
+        AdditionalFieldsRepository repository =
+                mock(AdditionalFieldsRepository.class);
+
+        AdditionalFieldsProcessor processor =
+                new AdditionalFieldsProcessor(repository, 9855L);
+
+        assertEquals(
+                9855L,
+                processor.getIngestionId()
+        );
+    }
+
+    @Test
+    void shouldGenerateAdditionalFieldsFileSuccessfully() {
+
+        AdditionalFieldsRepository repository =
+                mock(AdditionalFieldsRepository.class);
+
+        when(repository.fetch())
+                .thenReturn(
+                        List.of(
+                                new AdditionalFieldsRecord(
+                                        "SG",
+                                        "D001",
+                                        "STEP001",
+                                        1,
+                                        "DATA001",
+                                        "DATA DESC",
+                                        "DOC001",
+                                        "DOC DESC",
+                                        "DOCNO001",
+                                        "USD",
+                                        new BigDecimal("100.50"),
+                                        "VAL001",
+                                        "VALUE DESC",
+                                        20260429,
+                                        "Remarks",
+                                        20260429,
+                                        "STEP002",
+                                        "USER001"
+                                )
+                        )
+                );
+
+        AdditionalFieldsProcessor processor =
+                new AdditionalFieldsProcessor(repository, 9855L);
+
+        String filePath = processor.process();
+
+        File file = new File(filePath);
+
+        assertTrue(file.exists());
+        assertTrue(file.length() > 0);
+    }
+
+    @Test
+    void shouldThrowExceptionWhenRepositoryFails() {
+
+        AdditionalFieldsRepository repository =
+                mock(AdditionalFieldsRepository.class);
+
+        when(repository.fetch())
+                .thenThrow(new RuntimeException("DB failure"));
+
+        AdditionalFieldsProcessor processor =
+                new AdditionalFieldsProcessor(repository, 9855L);
+
+        RuntimeException exception =
+                assertThrows(
+                        RuntimeException.class,
+                        processor::process
+                );
+
+        assertTrue(
+                exception.getMessage()
+                        .contains("Failed to process additional fields data")
+        );
+    }
+}
