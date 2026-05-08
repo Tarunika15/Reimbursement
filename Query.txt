@@ -1,0 +1,116 @@
+SELECT
+
+    VAT.DEAL_NO || COALESCE(STP.STEP_ID, '') || VAT.CHARGE_SERIAL_NO
+        AS VATRefId,
+
+    STP.ACTUAL_REL_DATE AS VATGenDate,
+
+    CASE
+        WHEN SUBSTR(LTRIM(VAT.DEAL_NO, '0'),1,3) = '860'
+            THEN LTRIM(VAT.DEAL_NO, '0') || 'BEI'
+
+        WHEN SUBSTR(LTRIM(VAT.DEAL_NO, '0'),1,3) = '870'
+            THEN LTRIM(VAT.DEAL_NO, '0') || 'SHA'
+
+        WHEN SUBSTR(LTRIM(VAT.DEAL_NO, '0'),1,3) = '880'
+            THEN LTRIM(VAT.DEAL_NO, '0') || 'GUA'
+
+        ELSE LTRIM(VAT.DEAL_NO, '0')
+    END AS DealID,
+
+    STP.ACTUAL_REL_DATE AS DealTransDate,
+
+    STP.ACTUAL_REL_DATE AS DealAccountingDate,
+
+    CASE
+        WHEN VAT.REFUND_IND = 'Y'
+            THEN 'TRUE'
+        ELSE 'FALSE'
+    END AS Reverse,
+
+    CASE
+        WHEN VAT.REFUND_IND = 'Y'
+            THEN VAT.DEAL_NO
+                 || COALESCE(STP.REF_STEP_ID, '')
+                 || VAT.CHARGE_SERIAL_NO
+        ELSE ''
+    END AS OriginalVATRefID,
+
+    CCM.FIXED_PERCENT AS VATRate,
+
+    CASE
+        WHEN VAT.DR_CALC_CURR <> VAT.CR_CALC_CURR
+             AND DEL.DEAL_CURR <> 'CNY'
+            THEN 'FCY'
+        ELSE DEL.DEAL_CURR
+    END AS OriginalCurrency,
+
+    TOT.CHARGE_AMT AS TotalAmountWithOriginalCurrency,
+
+    VAT.CHARGE_AMT AS TaxAmountWithOriginalCurrency,
+
+    (TOT.CHARGE_AMT - VAT.CHARGE_AMT)
+        AS AmountAfterVATWithOriginalCurrency,
+
+    'CNY' AS TargetCurrency,
+
+    VAT.DR_LOC_EXCH_RATE AS ConvertRate,
+
+    (TOT.CHARGE_AMT * VAT.DR_LOC_EXCH_RATE)
+        AS ConvertedTotalAmount,
+
+    (VAT.CHARGE_AMT * VAT.DR_LOC_EXCH_RATE)
+        AS ConvertedTaxAmount,
+
+    ((TOT.CHARGE_AMT - VAT.CHARGE_AMT)
+        * VAT.DR_LOC_EXCH_RATE)
+        AS ConvertedAmountAfterVAT,
+
+    REV.TCCFCODE AS RevenueType
+
+FROM
+
+(
+    SELECT
+        DEAL_NO,
+        CHARGE_SERIAL_NO,
+        CHARGE_AMT,
+        DR_LOC_EXCH_RATE,
+        DR_CALC_CURR,
+        CR_CALC_CURR,
+        ENTITY,
+        REFUND_IND
+    FROM IXPS.IXQDBCHG
+    WHERE CHARGE_ID = '800200'
+) VAT
+
+INNER JOIN
+
+(
+    SELECT
+        DEAL_NO,
+        SERIAL_NO_FOR_VAT,
+        CHARGE_AMT
+    FROM IXPS.IXQDBCHG
+    WHERE CHARGE_ID = '802001'
+      AND CHARGE_WHEN = 'N'
+) TOT
+
+ON VAT.DEAL_NO = TOT.DEAL_NO
+AND VAT.CHARGE_SERIAL_NO = TOT.SERIAL_NO_FOR_VAT
+
+LEFT JOIN IXPS.IXQDBSTP STP
+ON VAT.DEAL_NO = STP.DEAL_NO
+
+LEFT JOIN IXPS.IXQDBDEL DEL
+ON VAT.DEAL_NO = DEL.DEAL_NO
+
+LEFT JOIN IXPS.IXQDBCCM CCM
+ON CCM.ENTITY = '022'
+AND CCM.COMM_ID = '800200'
+
+LEFT JOIN PTRS.PT0140V4 REV
+ON REV.TCCODE = VAT.ENTITY || '800200'
+
+FETCH FIRST 100 ROWS ONLY
+WITH UR;
