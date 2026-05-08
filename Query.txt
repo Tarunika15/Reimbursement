@@ -1,0 +1,117 @@
+SELECT
+    /* 1. VATRefId */
+    CHG.DEAL_NO || STP.STEP_ID || CHG.CHARGE_SERIAL_NO AS VATRefId,
+
+    /* 2. VATGenDate */
+    STP.ACTUAL_REL_DATE AS VATGenDate,
+
+    /* 3. DealID */
+    CASE
+        WHEN SUBSTR(LTRIM(CHG.DEAL_NO, '0'), 1, 3) = '860'
+            THEN LTRIM(CHG.DEAL_NO, '0') || 'BEI'
+        WHEN SUBSTR(LTRIM(CHG.DEAL_NO, '0'), 1, 3) = '870'
+            THEN LTRIM(CHG.DEAL_NO, '0') || 'SHA'
+        WHEN SUBSTR(LTRIM(CHG.DEAL_NO, '0'), 1, 3) = '880'
+            THEN LTRIM(CHG.DEAL_NO, '0') || 'GUA'
+        ELSE LTRIM(CHG.DEAL_NO, '0')
+    END AS DealID,
+
+    /* 4. DealTransDate */
+    STP.ACTUAL_REL_DATE AS DealTransDate,
+
+    /* 5. DealAccountingDate */
+    STP.ACTUAL_REL_DATE AS DealAccountingDate,
+
+    /* 6. Reverse */
+    CASE
+        WHEN CHG.REFUND_IND = 'Y'
+             AND STP.STEP_ID = 'MSC_AA'
+            THEN 'TRUE'
+
+        WHEN CHG.CHARGE_ID = '800026'
+             AND STP.STEP_ID = 'MSC_RD'
+            THEN 'TRUE'
+
+        ELSE 'FALSE'
+    END AS Reverse,
+
+    /* 7. OriginalVATRefID */
+    CASE
+        WHEN CHG.REFUND_IND = 'Y'
+             AND STP.STEP_ID = 'MSC_AA'
+            THEN CHG.DEAL_NO || STP.REF_STEP_ID || CHG.CHARGE_SERIAL_NO
+
+        WHEN CHG.CHARGE_ID = '800026'
+             AND STP.STEP_ID = 'MSC_RD'
+            THEN CHG.DEAL_NO || STP.REF_STEP_ID || CHG.CHARGE_SERIAL_NO
+
+        ELSE ''
+    END AS OriginalVATRefID,
+
+    /* 8. VATRate */
+    CCM.FIXED_PERCENT AS VATRate,
+
+    /* 9. OriginalCurrency */
+    CASE
+        WHEN CHG.DR_CALC_CURR <> CHG.CR_CALC_CURR
+             AND DEL.DEAL_CURR <> 'CNY'
+            THEN 'FCY'
+        ELSE DEL.DEAL_CURR
+    END AS OriginalCurrency,
+
+    /* 10. TotalAmountWithOriginalCurrency */
+    TOT.CHARGE_AMT AS TotalAmountWithOriginalCurrency,
+
+    /* 11. TaxAmountWithOriginalCurrency */
+    CHG.CHARGE_AMT AS TaxAmountWithOriginalCurrency,
+
+    /* 12. AmountAfterVATWithOriginalCurrency */
+    (TOT.CHARGE_AMT - CHG.CHARGE_AMT)
+        AS AmountAfterVATWithOriginalCurrency,
+
+    /* 13. TargetCurrency */
+    'CNY' AS TargetCurrency,
+
+    /* 14. ConvertRate */
+    CHG.DR_LOC_EXCH_RATE AS ConvertRate,
+
+    /* 15. ConvertedTotalAmount */
+    (TOT.CHARGE_AMT * CHG.DR_LOC_EXCH_RATE)
+        AS ConvertedTotalAmount,
+
+    /* 16. ConvertedTaxAmount */
+    ((TOT.CHARGE_AMT - CHG.CHARGE_AMT)
+        * CHG.DR_LOC_EXCH_RATE)
+        AS ConvertedTaxAmount,
+
+    /* 17. ConvertedAmountAfterVAT */
+    ((TOT.CHARGE_AMT - CHG.CHARGE_AMT)
+        * CHG.DR_LOC_EXCH_RATE)
+        AS ConvertedAmountAfterVAT,
+
+    /* 18. RevenueType */
+    REV.TCCFCODE AS RevenueType
+
+FROM IXPS.IXQDBCHG CHG
+
+INNER JOIN IXPS.IXQDBSTP STP
+    ON CHG.DEAL_NO = STP.DEAL_NO
+
+LEFT JOIN IXPS.IXQDBDEL DEL
+    ON CHG.DEAL_NO = DEL.DEAL_NO
+
+LEFT JOIN IXPS.IXQDBCCM CCM
+    ON CCM.ENTITY = '022'
+   AND CCM.COMM_ID = '800200'
+
+/* Total Amount Record */
+LEFT JOIN IXPS.IXQDBCHG TOT
+    ON CHG.DEAL_NO = TOT.DEAL_NO
+   AND TOT.CHARGE_ID = '802001'
+   AND TOT.CHARGE_WHEN = 'N'
+
+LEFT JOIN PTRS.PT0140V4 REV
+    ON REV.TCCODE = CHG.ENTITY || CHG.CHARGE_ID
+
+WHERE CHG.CHARGE_ID = '800200'
+  AND CHG.SERIAL_NO_FOR_VAT = CHG.CHARGE_SERIAL_NO;
