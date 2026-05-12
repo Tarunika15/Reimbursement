@@ -1,0 +1,347 @@
+public static ParticipantsRecord participantsRecord() {
+
+        ParticipantsRecord record =
+                new ParticipantsRecord();
+
+        record.setEntity("SG");
+        record.setDealNo("D001");
+        record.setPartyCode("P001");
+        record.setPartyId("PTY001");
+        record.setCreateStepId("STEP001");
+        record.setPartyExt("EXT001");
+        record.setPartyName("Party Name");
+        record.setPartyAddress("Party Address");
+        record.setStepId("STP001");
+        record.setWithinGroup("Y");
+        record.setCountryCode("IND");
+
+        return record;
+    }
+	public static AdditionalFieldsRecord additionalFieldsRecord() {
+
+        AdditionalFieldsRecord record =
+                new AdditionalFieldsRecord();
+
+        record.setEntity("SG");
+        record.setDealNo("D001");
+        record.setStepId("STEP001");
+        record.setRowNo(1);
+        record.setDataCode("DATA001");
+        record.setDataDesc("DATA DESC");
+        record.setDocTypeCode("DOC001");
+        record.setDocDesc("DOC DESC");
+        record.setDocNo("DOCNO001");
+        record.setCurr("USD");
+        record.setAmount(new BigDecimal("100.50"));
+        record.setValueCode("VAL001");
+        record.setValueDesc("VALUE DESC");
+        record.setDate1(20260429);
+        record.setRemarks("Remarks");
+        record.setLastUpdateDate(20260429);
+        record.setLastUpdateStepId("STEP002");
+        record.setLastUpdateUser("USER001");
+
+        return record;
+    }
+
+@ExtendWith(MockitoExtension.class)
+class PipelineControllerTest {
+
+    @Mock
+    private PipelineService pipelineService;
+
+    @InjectMocks
+    private PipelineController pipelineController;
+
+    @Test
+    void shouldExecutePipelineSuccessfully() {
+
+        ResponseEntity<String> response =
+                pipelineController.execute();
+
+        verify(pipelineService, times(1))
+                .execute();
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+
+        assertEquals(
+                "Pipeline executed successfully",
+                response.getBody()
+        );
+    }
+}
+
+class FileGenerationServiceTest {
+
+    private final FileGenerationService service =
+            new FileGenerationService();
+
+    @Test
+    void shouldGenerateParticipantsFileSuccessfully() {
+
+        ParticipantsRecord record =
+                TestDataFactory.participantsRecord();
+
+        File file = service.generateParticipantsFile(
+                List.of(record),
+                "HEADER"
+        );
+
+        assertTrue(file.exists());
+        assertTrue(file.length() > 0);
+    }
+}
+
+class FileUploadServiceTest {
+
+    private final FileUploadService service =
+            new FileUploadService();
+
+    @Test
+    void shouldThrowExceptionForInvalidUrl() {
+
+        File file = new File("invalid.txt");
+
+        assertThrows(
+                RuntimeException.class,
+                () -> service.upload(
+                        "invalid-url",
+                        file
+                )
+        );
+    }
+}
+
+@ExtendWith(MockitoExtension.class)
+class IngaasAdapterTest {
+
+    @Mock
+    private IngaasFeignClient feignClient;
+
+    @InjectMocks
+    private IngaasAdapter adapter;
+
+    @Test
+    void shouldReturnPresignedUrlSuccessfully() {
+
+        PresignedResponse response =
+                new PresignedResponse();
+
+        response.setPresignedUrl(
+                "https://presigned-url"
+        );
+
+        when(feignClient.getPresignedUrl(
+                eq(9850L),
+                any(IngaasUploadRequest.class)
+        )).thenReturn(response);
+
+        String result = adapter.getPresignedUrl(
+                9850L,
+                "20260512",
+                "participants.D20260512"
+        );
+
+        assertEquals(
+                "https://presigned-url",
+                result
+        );
+    }
+}
+
+    @Mock
+    private IngaasAdapter ingaasAdapter;
+
+    @Mock
+    private FileUploadService fileUploadService;
+
+    @Mock
+    private ParticipantsQuery participantsQuery;
+
+    @Mock
+    private AdditionalFieldsQuery additionalFieldsQuery;
+
+    @InjectMocks
+    private PipelineRepositoryAdapter repositoryAdapter;
+
+    @Test
+    void shouldExecutePipelineSuccessfully() {
+
+        when(participantsQuery.fetchQuery())
+                .thenReturn("SELECT 1 FROM SYSIBM.SYSDUMMY1");
+
+        when(additionalFieldsQuery.fetchQuery())
+                .thenReturn("SELECT 1 FROM SYSIBM.SYSDUMMY1");
+
+        when(ingaasAdapter.getPresignedUrl(
+                any(),
+                any(),
+                any()
+        )).thenReturn("https://presigned-url");
+
+        doNothing().when(fileUploadService)
+                .upload(any(), any(File.class));
+
+        repositoryAdapter.execute();
+    }
+}
+
+class ParticipantsRowMapperTest {
+
+    private final ParticipantsRowMapper mapper =
+            new ParticipantsRowMapper();
+
+    @Test
+    void shouldMapResultSetSuccessfully()
+            throws Exception {
+
+        ResultSet rs = mock(ResultSet.class);
+
+        when(rs.getString("ENTITY"))
+                .thenReturn("SG");
+
+        when(rs.getString("DEAL_NO"))
+                .thenReturn("D001");
+
+        when(rs.getString("PARTY_CODE"))
+                .thenReturn("P001");
+
+        when(rs.getString("PARTY_ID"))
+                .thenReturn("PTY001");
+
+        when(rs.getString("CREATE_STEP_ID"))
+                .thenReturn("STEP001");
+
+        when(rs.getString("PARTY_EXT"))
+                .thenReturn("EXT001");
+
+        when(rs.getString("PARTY_NAME"))
+                .thenReturn("Party Name");
+
+        when(rs.getString("PARTY_ADDRESS"))
+                .thenReturn("Party Address");
+
+        when(rs.getString("STEP_ID"))
+                .thenReturn("STP001");
+
+        when(rs.getString("WITHIN_GROUP"))
+                .thenReturn("Y");
+		
+		when(rs.getString("COUNTRY_CODE"))
+                .thenReturn("IND");
+
+        ParticipantsRecord result =
+                mapper.mapRow(rs, 1);
+
+        assertEquals("SG", result.getEntity());
+        assertEquals("D001", result.getDealNo());
+        assertEquals("P001", result.getPartyCode());
+        assertEquals("PTY001", result.getPartyId());
+        assertEquals("STEP001", result.getCreateStepId());
+        assertEquals("EXT001", result.getPartyExt());
+        assertEquals("Party Name", result.getPartyName());
+        assertEquals("Party Address", result.getPartyAddress());
+        assertEquals("STP001", result.getStepId());
+        assertEquals("Y", result.getWithinGroup());
+        assertEquals("IND", result.getCountryCode());
+    }
+}
+
+
+class AdditionalFieldsRowMapperTest {
+
+    private final AdditionalFieldsRowMapper mapper =
+            new AdditionalFieldsRowMapper();
+
+    @Test
+    void shouldMapResultSetSuccessfully() throws Exception {
+
+        ResultSet rs = mock(ResultSet.class);
+
+        when(rs.getString("ENTITY"))
+                .thenReturn("SG");
+
+        AdditionalFieldsRecord result =
+                mapper.mapRow(rs, 1);
+
+        assertEquals("SG", result.getEntity());
+    }
+}
+
+@SpringBootTest
+@AutoConfigureMockMvc
+class PipelineControllerIT {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Test
+    void shouldExecutePipelineSuccessfully()
+            throws Exception {
+
+        mockMvc.perform(
+                        post("/v1/pipeline/execute")
+                )
+                .andExpect(status().isOk());
+    }
+}
+
+@SpringBootTest
+class ApplicationStartupIT {
+
+    @Test
+    void contextLoads() {
+    }
+}
+
+public final class TestDataFactory {
+
+    private TestDataFactory() {
+    }
+
+    public static ParticipantsRecord participantsRecord() {
+
+        ParticipantsRecord record =
+                new ParticipantsRecord();
+
+        record.setEntity("SG");
+        record.setDealNo("D001");
+        record.setPartyCode("P001");
+        record.setPartyId("PTY001");
+        record.setCreateStepId("STEP001");
+        record.setPartyExt("EXT001");
+        record.setPartyName("Party Name");
+        record.setPartyAddress("Party Address");
+        record.setStepId("STP001");
+        record.setWithinGroup("Y");
+        record.setCountryCode("IND");
+
+        return record;
+    }
+	public static AdditionalFieldsRecord additionalFieldsRecord() {
+
+        AdditionalFieldsRecord record =
+                new AdditionalFieldsRecord();
+
+        record.setEntity("SG");
+        record.setDealNo("D001");
+        record.setStepId("STEP001");
+        record.setRowNo(1);
+        record.setDataCode("DATA001");
+        record.setDataDesc("DATA DESC");
+        record.setDocTypeCode("DOC001");
+        record.setDocDesc("DOC DESC");
+        record.setDocNo("DOCNO001");
+        record.setCurr("USD");
+        record.setAmount(new BigDecimal("100.50"));
+        record.setValueCode("VAL001");
+        record.setValueDesc("VALUE DESC");
+        record.setDate1(20260512);
+        record.setRemarks("Remarks");
+        record.setLastUpdateDate(20260512);
+        record.setLastUpdateStepId("STEP002");
+        record.setLastUpdateUser("USER001");
+
+        return record;
+    }
+}
