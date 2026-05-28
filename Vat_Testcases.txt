@@ -1,0 +1,218 @@
+VatControllerTest:
+package com.sg.trade.asia.infrastructure.vat.api;
+
+import com.sg.trade.asia.domain.vat.*;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import org.springframework.test.web.servlet.MockMvc;
+
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+
+import java.util.List;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+class VatControllerTest {
+
+    private MockMvc mockMvc;
+
+    @Mock
+    private VatService vatService;
+
+    @InjectMocks
+    private VatController vatController;
+
+    @BeforeEach
+    void setUp() {
+
+        MockitoAnnotations.openMocks(this);
+
+        mockMvc = MockMvcBuilders
+                .standaloneSetup(vatController)
+                .build();
+    }
+
+    @Test
+    @DisplayName(
+            "Should return 200 when valid request is given"
+    )
+    void should_return_200_when_valid_request_is_given()
+            throws Exception {
+
+        // Given
+        when(vatService.fetchVatDetails(any()))
+                .thenReturn(
+                        List.of(Vat.builder().build())
+                );
+
+        // When / Then
+        mockMvc.perform(
+                        get("/endpoint/vat")
+                                .param(
+                                        "ProcessingDateStart",
+                                        "20260504"
+                                )
+                                .param(
+                                        "ProcessingDateEnd",
+                                        "20260504"
+                                )
+                                .param(
+                                        "PageNo",
+                                        "0"
+                                )
+                                .param(
+                                        "PageSize",
+                                        "100"
+                                )
+                )
+                .andExpect(status().isOk());
+    }
+}
+
+DefaultVatServiceTest:
+package com.sg.trade.asia.domain.vat;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.*;
+
+class DefaultVatServiceTest {
+
+    @Mock
+    private VatRepository repository;
+
+    @InjectMocks
+    private DefaultVatService service;
+
+    @BeforeEach
+    void setUp() {
+
+        MockitoAnnotations.openMocks(this);
+    }
+
+    @Test
+    @DisplayName("Should return VAT response when repository returns data")
+    void should_return_vat_response_when_repository_returns_data() {
+
+        // Given
+        VatCommand command =
+                VatCommand.builder()
+                        .processingDateStart(20260504L)
+                        .processingDateEnd(20260504L)
+                        .pageNo(0)
+                        .pageSize(100)
+                        .build();
+
+        List<Vat> expected =
+                List.of(Vat.builder()
+                        .vatRefId("VAT001")
+                        .build());
+
+        when(repository.fetchVatDetails(command))
+                .thenReturn(expected);
+
+        // When
+        List<Vat> actual =
+                service.fetchVatDetails(command);
+
+        // Then
+        assertEquals(1, actual.size());
+
+        verify(repository, times(1))
+                .fetchVatDetails(command);
+    }
+}
+
+
+VatRepositoryAdaptorTest:
+package com.sg.trade.asia.vat.adaptor;
+
+import com.sg.trade.asia.domain.vat.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.when;
+
+class VatRepositoryAdaptorTest {
+
+    @Mock
+    private NamedParameterJdbcTemplate jdbcTemplate;
+
+    @InjectMocks
+    private VatRepositoryAdaptor adaptor;
+
+    @BeforeEach
+    void setUp() {
+
+        MockitoAnnotations.openMocks(this);
+    }
+
+    @Test
+    @DisplayName("Should return mapped VAT response")
+    void should_return_mapped_vat_response() {
+
+        // Given
+        VatCommand command =
+                VatCommand.builder()
+                        .processingDateStart(20260504L)
+                        .processingDateEnd(20260504L)
+                        .pageNo(0)
+                        .pageSize(100)
+                        .build();
+
+        List<Vat> expected =
+                List.of(
+                        Vat.builder()
+                                .vatRefId("VAT001")
+                                .build()
+                );
+
+        when(jdbcTemplate.query(
+                anyString(),
+                anyMap(),
+                any(RowMapper.class)
+        )).thenReturn(expected);
+
+        // When
+        List<Vat> actual =
+                adaptor.fetchVatDetails(command);
+
+        // Then
+        assertEquals(1, actual.size());
+
+        assertEquals(
+                "VAT001",
+                actual.get(0).getVatRefId()
+        );
+    }
+}
