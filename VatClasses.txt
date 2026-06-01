@@ -1,0 +1,340 @@
+package com.sg.trade.asia.bootstrap.vat;
+
+import com.zaxxer.hikari.HikariDataSource;
+import jakarta.persistence.EntityManagerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.boot.orm.jpa.EntityManagerFactoryBuilder;
+import org.springframework.context.annotation.*;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.orm.jpa.JpaTransactionManager;
+import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
+import org.springframework.transaction.PlatformTransactionManager;
+
+import javax.sql.DataSource;
+import java.util.HashMap;
+import java.util.Map;
+
+@Configuration
+@Profile("!test")
+@EnableJpaRepositories(
+        basePackages = "com.sg.trade.asia.vat.repository",
+        entityManagerFactoryRef = "vatDb2EntityManagerFactory",
+        transactionManagerRef = "vatDb2TransactionManager"
+)
+@EntityScan(basePackages = "com.sg.trade.asia.vat")
+public class VatDB2Configuration {
+
+    @Value("${service.database.jdbc-url}")
+    private String jdbcUrl;
+
+    @Value("${service.database.driver-class-name}")
+    private String driverClassName;
+
+    @Value("${service.database.username}")
+    private String username;
+
+    @Value("${service.database.password}")
+    private String password;
+
+    @Bean(name = "vatDb2DataSource")
+    public DataSource vatDb2DataSource() {
+
+        HikariDataSource dataSource =
+                new HikariDataSource();
+
+        dataSource.setJdbcUrl(jdbcUrl);
+        dataSource.setDriverClassName(driverClassName);
+        dataSource.setUsername(username);
+        dataSource.setPassword(password);
+
+        return dataSource;
+    }
+
+    @Bean(name = "vatDb2EntityManagerFactory")
+    public LocalContainerEntityManagerFactoryBean
+    vatDb2EntityManagerFactory(
+            EntityManagerFactoryBuilder builder) {
+
+        Map<String, Object> properties =
+                new HashMap<>();
+
+        properties.put(
+                "hibernate.dialect",
+                "org.hibernate.dialect.DB2Dialect");
+
+        return builder
+                .dataSource(vatDb2DataSource())
+                .packages("com.sg.trade.asia.vat")
+                .persistenceUnit("vatDb2")
+                .properties(properties)
+                .build();
+    }
+
+    @Bean(name = "vatDb2TransactionManager")
+    public PlatformTransactionManager
+    vatDb2TransactionManager(
+            @Qualifier("vatDb2EntityManagerFactory")
+            EntityManagerFactory entityManagerFactory) {
+
+        return new JpaTransactionManager(
+                entityManagerFactory);
+    }
+}
+
+
+
+@Component
+public class ReverseIndicatorResolver {
+
+    private static final Set<String> REVERSAL_CHARGES =
+            Set.of(
+                    "802227",
+                    "802226",
+                    "80997"
+            );
+
+    public boolean isReverse(
+            VatRawData rawData) {
+
+        if ("MSC".equals(
+                rawData.getStepType())
+                &&
+                "AA".equals(
+                        rawData.getFinBatch())) {
+
+            return true;
+        }
+
+        return REVERSAL_CHARGES.contains(
+                rawData.getChargeId())
+                &&
+                "MSC".equals(
+                        rawData.getStepType())
+                &&
+                Set.of("RD", "AM")
+                        .contains(
+                                rawData.getFinBatch());
+    }
+}
+
+@Component
+public class OriginalVatReferenceGenerator {
+
+    public String generate(
+            VatRawData rawData) {
+
+        if (!"MSC".equals(
+                rawData.getStepType())) {
+
+            return null;
+        }
+
+        if (!Set.of(
+                "AA",
+                "RD",
+                "AM")
+                .contains(
+                        rawData.getFinBatch())) {
+
+            return null;
+        }
+
+        return rawData.getDealNo()
+                + rawData.getRefStepId()
+                + rawData.getChargeId();
+    }
+}
+
+@Component
+public class CurrencyResolver {
+
+    public String resolveOriginalCurrency(
+            VatRawData rawData) {
+
+        if (rawData.getDrCalcCurr() != null
+                &&
+                !rawData.getDrCalcCurr()
+                        .isBlank()) {
+
+            return rawData.getDrCalcCurr();
+        }
+
+        return rawData.getCrCalcCurr();
+    }
+
+    public BigDecimal resolveExchangeRate(
+            VatRawData rawData) {
+
+        String currency =
+                resolveOriginalCurrency(
+                        rawData);
+
+        if ("CNY".equalsIgnoreCase(
+                currency)) {
+
+            return null;
+        }
+
+        return rawData.getExchangeRate();
+    }
+}
+
+@Component
+public class AmountCalculator {
+
+    public BigDecimal amountAfterVat(
+            BigDecimal chargeAmt,
+            BigDecimal vatAmt) {
+
+        return chargeAmt.subtract(
+                vatAmt);
+    }
+
+    public BigDecimal convertedTotalAmount(
+            BigDecimal amount,
+            BigDecimal exchangeRate) {
+
+        if (exchangeRate == null) {
+            return null;
+        }
+
+        return amount.multiply(
+                exchangeRate);
+    }
+
+    public BigDecimal convertedTaxAmount(
+            BigDecimal amount,
+            BigDecimal exchangeRate) {
+
+        if (exchangeRate == null) {
+            return null;
+        }
+
+        return amount.multiply(
+                exchangeRate);
+    }
+
+    public BigDecimal convertedAmountAfterVat(
+            BigDecimal amountAfterVat,
+            BigDecimal exchangeRate) {
+
+        if (exchangeRate == null) {
+            return null;
+        }
+
+        return amountAfterVat.multiply(
+                exchangeRate);
+    }
+}
+
+@Component
+@RequiredArgsConstructor
+public class VatTransformer {
+
+    private final DealIdGenerator dealIdGenerator;
+
+    private final CurrencyResolver currencyResolver;
+
+    private final ReverseIndicatorResolver reverseResolver;
+
+    private final AmountCalculator amountCalculator;
+
+    private final OriginalVatReferenceGenerator originalVatReferenceGenerator;
+
+    public Vat transform(
+            VatRawData rawData) {
+
+        BigDecimal amountAfterVat =
+                amountCalculator.amountAfterVat(
+                        rawData.getChargeAmt(),
+                        rawData.getVatAmt());
+
+        BigDecimal exchangeRate =
+                currencyResolver
+                        .resolveExchangeRate(
+                                rawData);
+
+        return Vat.builder()
+
+                .vatRefId(
+                        rawData.getDealNo()
+                                + rawData.getStepType()
+                                + rawData.getStepNo()
+                                + rawData.getChargeId())
+
+                .vatGenDate(
+                        rawData.getActualRelDate())
+
+                .dealId(
+                        dealIdGenerator.generate(
+                                rawData.getDealNo()))
+
+                .dealTransDate(
+                        rawData.getActualRelDate())
+
+                .dealAccountingDate(
+                        rawData.getActualRelDate())
+
+                .reverse(
+                        reverseResolver
+                                .isReverse(
+                                        rawData))
+
+                .originalVatRefId(
+                        originalVatReferenceGenerator
+                                .generate(
+                                        rawData))
+
+                .vatRate(
+                        rawData.getVatRate())
+
+                .originalCurrency(
+                        currencyResolver
+                                .resolveOriginalCurrency(
+                                        rawData))
+
+                .totalAmount(
+                        rawData.getChargeAmt())
+
+                .taxAmount(
+                        rawData.getVatAmt())
+
+                .amountAfterVat(
+                        amountAfterVat)
+
+                .targetCurrency(
+                        "CNY")
+
+                .convertRate(
+                        exchangeRate)
+
+                .convertedTotalAmount(
+                        amountCalculator
+                                .convertedTotalAmount(
+                                        rawData.getChargeAmt(),
+                                        exchangeRate))
+
+                .convertedTaxAmount(
+                        amountCalculator
+                                .convertedTaxAmount(
+                                        rawData.getVatAmt(),
+                                        exchangeRate))
+
+                .convertedAmountAfterVat(
+                        amountCalculator
+                                .convertedAmountAfterVat(
+                                        amountAfterVat,
+                                        exchangeRate))
+
+                .revenueType(
+                        rawData.getRevenueType())
+
+                .customerId(
+                        rawData.getCustomerId())
+
+                .build();
+    }
+}
+
