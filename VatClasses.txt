@@ -1,0 +1,291 @@
+@Configuration
+public class VatDB2Configuration {
+
+    @Value("${service.database.jdbc-url}")
+    private String jdbcUrl;
+
+    @Value("${service.database.driver-class-name}")
+    private String driverClassName;
+
+    @Value("${service.database.username}")
+    private String username;
+
+    @Value("${service.database.password}")
+    private String password;
+
+    @Bean(name = "vatDb2JdbcTemplate")
+    public NamedParameterJdbcTemplate vatDb2JdbcTemplate() {
+
+        HikariDataSource dataSource =
+                new HikariDataSource();
+
+        dataSource.setJdbcUrl(jdbcUrl);
+        dataSource.setDriverClassName(driverClassName);
+        dataSource.setUsername(username);
+        dataSource.setPassword(password);
+
+        return new NamedParameterJdbcTemplate(dataSource);
+    }
+}
+
+
+@Repository
+@RequiredArgsConstructor
+public class VatRepositoryAdaptor implements VatRepository {
+
+    @Qualifier("vatDb2JdbcTemplate")
+    private final NamedParameterJdbcTemplate jdbcTemplate;
+
+    private final VatQueryProvider vatQueryProvider;
+
+    @Override
+    public List<VatRawData> fetchVatData(
+            final VatCommand command) {
+
+        String sql = vatQueryProvider.buildQuery();
+
+        Map<String, Object> params =
+                new HashMap<>();
+
+        params.put(
+                "processingDateStart",
+                command.getProcessingDateStart());
+
+        params.put(
+                "processingDateEnd",
+                command.getProcessingDateEnd());
+
+        return jdbcTemplate.query(
+                sql,
+                params,
+                new VatRowMapper());
+    }
+}
+
+@Component
+public class VatRowMapper
+        implements RowMapper<VatRawData> {
+
+    @Override
+    public VatRawData mapRow(
+            ResultSet rs,
+            int rowNum)
+            throws SQLException {
+
+        return VatRawData.builder()
+
+                .vatRefId(
+                        rs.getString("VATREFID"))
+
+                .vatGenDate(
+                        rs.getBigDecimal("VATGENDATE"))
+
+                .dealId(
+                        rs.getString("DEALID"))
+
+                .dealTransDate(
+                        rs.getBigDecimal("DEALTRANSDATE"))
+
+                .dealAccountingDate(
+                        rs.getBigDecimal("DEALACCOUNTINGDATE"))
+
+                .reverse(
+                        "TRUE".equalsIgnoreCase(
+                                rs.getString("REVERSE")))
+
+                .originalVatRefId(
+                        rs.getString("ORIGINALVATREFID"))
+
+                .vatRate(
+                        rs.getBigDecimal("VATRATE"))
+
+                .originalCurrency(
+                        rs.getString("ORIGINALCURRENCY"))
+
+                .totalAmount(
+                        rs.getBigDecimal(
+                                "TOTALAMOUNTWITHORIGINALCURRENCY"))
+
+                .taxAmount(
+                        rs.getBigDecimal(
+                                "TAXAMOUNTWITHORIGINALCURRENCY"))
+
+                .amountAfterVat(
+                        rs.getBigDecimal(
+                                "AMOUNTAFTERVATWITHORIGINALCURRENCY"))
+
+                .targetCurrency(
+                        rs.getString("TARGETCURRENCY"))
+
+                .convertRate(
+                        rs.getBigDecimal("CONVERTRATE"))
+
+                .convertedTotalAmount(
+                        rs.getBigDecimal(
+                                "CONVERTEDTOTALAMOUNT"))
+
+                .convertedTaxAmount(
+                        rs.getBigDecimal(
+                                "CONVERTEDTAXAMOUNT"))
+
+                .convertedAmountAfterVat(
+                        rs.getBigDecimal(
+                                "CONVERTEDAMOUNTAFTERVAT"))
+
+                .revenueType(
+                        rs.getString("REVENUETYPE"))
+
+                .customerId(
+                        rs.getString("CUSTOMERID"))
+
+                .build();
+    }
+}
+
+@Service
+@RequiredArgsConstructor
+public class DefaultVatService
+        implements VatService {
+
+    private final VatRepository vatRepository;
+
+    private final VatTransformer vatTransformer;
+
+    @Override
+    public List<Vat> fetchVatDetails(
+            final VatCommand command) {
+
+        List<VatRawData> rawData =
+                vatRepository.fetchVatData(command);
+
+        return rawData.stream()
+                .map(vatTransformer::transform)
+                .toList();
+    }
+}
+
+
+@Component
+public class VatTransformer {
+
+    public Vat transform(
+            VatRawData rawData) {
+
+        return Vat.builder()
+
+                .vatRefId(rawData.getVatRefId())
+
+                .vatGenDate(rawData.getVatGenDate())
+
+                .dealId(rawData.getDealId())
+
+                .dealTransDate(
+                        rawData.getDealTransDate())
+
+                .dealAccountingDate(
+                        rawData.getDealAccountingDate())
+
+                .reverse(rawData.getReverse())
+
+                .originalVatRefId(
+                        rawData.getOriginalVatRefId())
+
+                .vatRate(rawData.getVatRate())
+
+                .originalCurrency(
+                        rawData.getOriginalCurrency())
+
+                .totalAmount(
+                        rawData.getTotalAmount())
+
+                .taxAmount(
+                        rawData.getTaxAmount())
+
+                .amountAfterVat(
+                        rawData.getAmountAfterVat())
+
+                .targetCurrency(
+                        rawData.getTargetCurrency())
+
+                .convertRate(
+                        rawData.getConvertRate())
+
+                .convertedTotalAmount(
+                        rawData.getConvertedTotalAmount())
+
+                .convertedTaxAmount(
+                        rawData.getConvertedTaxAmount())
+
+                .convertedAmountAfterVat(
+                        rawData.getConvertedAmountAfterVat())
+
+                .revenueType(
+                        rawData.getRevenueType())
+
+                .customerId(
+                        rawData.getCustomerId())
+
+                .build();
+    }
+}
+
+@RestController
+@RequiredArgsConstructor
+@RequestMapping("/vat")
+public class VatController {
+
+    private final VatService vatService;
+
+    @GetMapping
+    public List<Vat> fetchVatDetails(
+            @ModelAttribute VatCommand command) {
+
+        return vatService.fetchVatDetails(command);
+    }
+}
+
+@Component
+@RequiredArgsConstructor
+public class VatQueryProvider {
+
+    private final SqlFileLoader loader;
+
+    @Value("${service.database.imex-schema}")
+    private String imexSchema;
+
+    @Value("${service.database.petra-schema}")
+    private String petraSchema;
+
+    public String buildQuery() {
+
+        return loader.load(
+                        "sql/vat/vat-template.sql")
+
+                .replace(
+                        "${REVENUE_TYPE_CTE}",
+                        revenueType())
+
+                .replace(
+                        "${DPR_FILTERED_CTE}",
+                        dprFiltered())
+
+                .replace(
+                        "${CUSTOMER_LOOKUP_CTE}",
+                        customerLookup())
+
+                .replace(
+                        "${VAT_SELECT}",
+                        vatSelect())
+
+                .replace(
+                        "${VAT_JOINS}",
+                        vatJoins())
+
+                .replace(
+                        "${VAT_WHERE}",
+                        vatWhere());
+    }
+
+    // helper methods...
+}
+
