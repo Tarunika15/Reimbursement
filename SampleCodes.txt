@@ -1,0 +1,169 @@
+@Component
+public class SqlFileLoader {
+
+    public String load(String path) {
+
+        try {
+
+            ClassPathResource resource =
+                    new ClassPathResource(path);
+
+            return new String(
+                    resource.getInputStream()
+                            .readAllBytes(),
+                    StandardCharsets.UTF_8);
+
+        } catch (IOException exception) {
+
+            throw new RuntimeException(
+                    "Unable to load SQL file",
+                    exception);
+        }
+    }
+}
+
+
+@Repository
+@RequiredArgsConstructor
+public class VatRepositoryAdaptor
+        implements VatRepository {
+
+    @Qualifier("vatDb2JdbcTemplate")
+    private final NamedParameterJdbcTemplate jdbcTemplate;
+
+    private final SqlFileLoader sqlFileLoader;
+
+    @Value("${service.database.imex-schema}")
+    private String imexSchema;
+
+    @Value("${service.database.petra-schema}")
+    private String petraSchema;
+
+    private final VatRowMapper vatRowMapper;
+
+    @Override
+    public List<VatRawData> fetchVatData(
+            final VatCommand command) {
+
+        String sql =
+                sqlFileLoader.load(
+                        "sql/vat/vat-query.sql");
+
+        sql = sql.replace(
+                "${IMEX_SCHEMA}",
+                imexSchema);
+
+        sql = sql.replace(
+                "${PETRA_SCHEMA}",
+                petraSchema);
+
+        Map<String, Object> params =
+                new HashMap<>();
+
+        params.put(
+                "processingDateStart",
+                command.getProcessingDateStart());
+
+        params.put(
+                "processingDateEnd",
+                command.getProcessingDateEnd());
+
+        System.out.println(
+                "========== FINAL SQL ==========");
+
+        System.out.println(sql);
+
+        System.out.println(
+                "================================");
+
+        return jdbcTemplate.query(
+                sql,
+                params,
+                vatRowMapper);
+    }
+}
+
+@Component
+public class VatRowMapper implements RowMapper<Vat> {
+
+    @Override
+    public Vat mapRow(
+            final ResultSet rs,
+            final int rowNum)
+            throws SQLException {
+
+        return Vat.builder()
+
+                .vatRefid(
+                        rs.getString("VATREFID"))
+
+                .vatGenDate(
+                        rs.getBigDecimal("VATGENDATE"))
+
+                .dealId(
+                        rs.getString("DEALID"))
+
+                .dealTransDate(
+                        rs.getBigDecimal("DEALTRANSDATE"))
+
+                .dealAccountingDate(
+                        rs.getBigDecimal("DEALACCOUNTINGDATE"))
+
+                .reverse(
+                        "TRUE".equalsIgnoreCase(
+                                rs.getString("REVERSE")))
+
+                .originalvatRefId(
+                        rs.getString(
+                                "ORIGINALVATREFID"))
+
+                .vatRate(
+                        rs.getBigDecimal("VATRATE"))
+
+                .originalCurrency(
+                        rs.getString(
+                                "ORIGINALCURRENCY"))
+
+                .totalAmount(
+                        rs.getBigDecimal(
+                                "TOTALAMOUNT"))
+
+                .taxAmount(
+                        rs.getBigDecimal(
+                                "TAXAMOUNT"))
+
+                .amountAfterVat(
+                        rs.getBigDecimal(
+                                "AMOUNTAFTERVAT"))
+
+                .targetCurrency(
+                        rs.getString(
+                                "TARGETCURRENCY"))
+
+                .convertRate(
+                        rs.getBigDecimal(
+                                "CONVERTRATE"))
+
+                .convertedTotalAmount(
+                        rs.getBigDecimal(
+                                "CONVERTEDTOTALAMOUNT"))
+
+                .convertedTaxAmount(
+                        rs.getBigDecimal(
+                                "CONVERTEDTAXAMOUNT"))
+
+                .convertedAmountAfterVat(
+                        rs.getBigDecimal(
+                                "CONVERTEDAMOUNTAFTERVAT"))
+
+                .revenueType(
+                        rs.getString(
+                                "REVENUETYPE"))
+
+                .customerId(
+                        rs.getString(
+                                "CUSTOMERID"))
+
+                .build();
+    }
+}
