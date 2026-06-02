@@ -1,0 +1,661 @@
+@Getter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class VatSearchCriteria {
+
+    private Integer processingDateStart;
+
+    private Integer processingDateEnd;
+
+    private Integer pageNo;
+
+    private Integer pageSize;
+}
+
+@Getter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class VatEntry {
+
+    private String vatRefId;
+
+    private Integer vatGenDate;
+
+    private String dealId;
+
+    private Integer dealTransDate;
+
+    private Integer dealAccountingDate;
+
+    private String reverse;
+
+    private String originalVatRefId;
+
+    private BigDecimal vatRate;
+
+    private String originalCurrency;
+
+    private BigDecimal totalAmount;
+
+    private BigDecimal taxAmount;
+
+    private BigDecimal amountAfterVat;
+
+    private String targetCurrency;
+
+    private BigDecimal convertRate;
+
+    private BigDecimal convertedTotalAmount;
+
+    private BigDecimal convertedTaxAmount;
+
+    private BigDecimal convertedAmountAfterVat;
+
+    private String revenueType;
+
+    private String customerId;
+}
+
+@Getter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class Paging {
+
+    private Long totalRecord;
+
+    private Integer pageNo;
+
+    private Integer totalPage;
+
+    private Integer pageSize;
+}
+
+@Getter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class VatResponse {
+
+    private List<VatEntry> entries;
+
+    private Paging paging;
+}
+
+public interface VatRepository {
+
+    VatResponse findVatRecords(
+            VatSearchCriteria criteria);
+}
+
+public interface VatService {
+
+    VatResponse getVatRecords(
+            VatSearchCriteria criteria);
+}
+
+@Slf4j
+@RequiredArgsConstructor
+public class DefaultVatService implements VatService {
+
+    private final VatRepository vatRepository;
+
+    @Override
+    public VatResponse getVatRecords(
+            VatSearchCriteria criteria) {
+
+        log.info(
+                "VatFetchStartSummary: processingDateStart={}, processingDateEnd={}, pageNo={}, pageSize={}",
+                criteria.getProcessingDateStart(),
+                criteria.getProcessingDateEnd(),
+                criteria.getPageNo(),
+                criteria.getPageSize());
+
+        return vatRepository.findVatRecords(criteria);
+    }
+}
+
+@Configuration
+public class VatConfiguration {
+
+    @Bean
+    public VatService vatService(
+            VatRepository vatRepository) {
+
+        return new DefaultVatService(
+                vatRepository);
+    }
+}
+
+@RestController
+@RequiredArgsConstructor
+@Tag(
+        name = "VAT Resource",
+        description = "VAT extraction endpoint")
+public class VatController {
+
+    private final VatService vatService;
+
+    @Operation(
+            summary = "Fetch VAT records")
+    @GetMapping(
+            value = "/v1/vat",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<VatResponse> getVatRecords(
+
+            @Parameter(description = "Processing date start")
+            @RequestParam Integer processingDateStart,
+
+            @Parameter(description = "Processing date end")
+            @RequestParam Integer processingDateEnd,
+
+            @Parameter(description = "Page number")
+            @RequestParam(defaultValue = "0")
+            Integer pageNo,
+
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "100")
+            Integer pageSize) {
+
+        VatSearchCriteria criteria =
+                VatSearchCriteria.builder()
+                        .processingDateStart(processingDateStart)
+                        .processingDateEnd(processingDateEnd)
+                        .pageNo(pageNo)
+                        .pageSize(pageSize)
+                        .build();
+
+        return ResponseEntity.ok(
+                vatService.getVatRecords(criteria));
+    }
+}
+
+public class VatRowMapper
+        implements RowMapper<VatEntry> {
+
+    @Override
+    public VatEntry mapRow(
+            ResultSet rs,
+            int rowNum)
+            throws SQLException {
+
+        return VatEntry.builder()
+                .vatRefId(rs.getString("VATREFID"))
+                .vatGenDate(rs.getInt("VATGENDATE"))
+                .dealId(rs.getString("DEALID"))
+                .dealTransDate(rs.getInt("DEALTRANSDATE"))
+                .dealAccountingDate(rs.getInt("DEALACCOUNTINGDATE"))
+                .reverse(rs.getString("REVERSE"))
+                .originalVatRefId(rs.getString("ORIGINALVATREFID"))
+                .vatRate(rs.getBigDecimal("VATRATE"))
+                .originalCurrency(rs.getString("ORIGINALCURRENCY"))
+                .totalAmount(rs.getBigDecimal("TOTALAMOUNT"))
+                .taxAmount(rs.getBigDecimal("TAXAMOUNT"))
+                .amountAfterVat(rs.getBigDecimal("AMOUNTAFTERVAT"))
+                .targetCurrency(rs.getString("TARGETCURRENCY"))
+                .convertRate(rs.getBigDecimal("CONVERTRATE"))
+                .convertedTotalAmount(rs.getBigDecimal("CONVERTEDTOTALAMOUNT"))
+                .convertedTaxAmount(rs.getBigDecimal("CONVERTEDTAXAMOUNT"))
+                .convertedAmountAfterVat(
+                        rs.getBigDecimal("CONVERTEDAMOUNTAFTERVAT"))
+                .revenueType(rs.getString("REVENUETYPE"))
+                .customerId(rs.getString("CUSTOMERID"))
+                .build();
+    }
+}
+
+@Getter
+@Setter
+@ConfigurationProperties(prefix = "vat.schema")
+public class VatProperties {
+
+    private String ptrk;
+
+    private String ixpk;
+}
+
+public final class RevenueTypeSql {
+
+    private RevenueTypeSql() {
+    }
+
+    public static final String SQL = """
+        REVENUE_TYPE AS (
+            SELECT
+                TCCODE,
+                TCCFCODE
+            FROM %s.PTR0140VM
+        )
+        """;
+}
+
+public final class CustomerLookupSql {
+
+    private CustomerLookupSql() {
+    }
+
+    public static final String SQL = """
+        DPR_FILTERED AS (
+
+            SELECT
+                DEAL_NO,
+                PARTY_CODE,
+                PARTY_ID,
+                PARTY_EXT,
+                CUSTOMER_ID,
+
+                ROW_NUMBER() OVER(
+                    PARTITION BY DEAL_NO,
+                                 PARTY_CODE
+                    ORDER BY PARTY_ID
+                ) AS RN
+
+            FROM %s.IXQDBDPR
+
+            WHERE PARTY_CODE IN ('APP','REQ')
+        ),
+
+        CUSTOMER_LOOKUP AS (
+
+            SELECT
+                CHG2.DEAL_NO,
+
+                CASE
+                    WHEN ICD.LC_LG_TYPE = 'GA'
+                     AND DPR.PARTY_CODE = 'APP'
+                    THEN COALESCE(
+                            CST.CIF_ID,
+                            CST2.CIF_ID
+                         )
+
+                    WHEN ICD.LC_LG_TYPE = 'GC'
+                     AND DPR.PARTY_CODE = 'REQ'
+                    THEN EXG.BIF_ID
+
+                    ELSE NULL
+                END AS CUSTOMERID,
+
+                ROW_NUMBER() OVER(
+                    PARTITION BY CHG2.DEAL_NO
+                    ORDER BY CHG2.DEAL_NO
+                ) AS RN
+
+            FROM %s.IXQDBCHG CHG2
+
+            LEFT JOIN %s.IXQDBDEL DEL
+                   ON DEL.DEAL_NO = CHG2.DEAL_NO
+
+            LEFT JOIN %s.IXQDBICD ICD
+                   ON ICD.DEAL_NO = CHG2.DEAL_NO
+
+            LEFT JOIN DPR_FILTERED DPR
+                   ON DPR.DEAL_NO = CHG2.DEAL_NO
+                  AND DPR.RN = 1
+
+            LEFT JOIN %s.IXQDBCST CST
+                   ON CST.CUSTOMER_ID = DEL.CUSTOMER_ID
+
+            LEFT JOIN %s.IXQDBCST CST2
+                   ON CST2.CUSTOMER_ID = DPR.PARTY_ID
+
+            LEFT JOIN %s.IXQDBEXG EXG
+                   ON EXG.PARTY_ID = DPR.PARTY_ID
+                  AND EXG.EXT_NO = DPR.PARTY_EXT
+        )
+        """;
+}
+
+public final class VatExtractionSql {
+
+    private VatExtractionSql() {
+    }
+
+    public static final String SQL = """
+        SELECT
+
+            CHG2.DEAL_NO
+            || CHG2.STEP_TYPE
+            || CHG2.STEP_NO
+            || CHG2.CHARGE_ID
+            AS VATREFID,
+
+            STP.ACTUAL_REL_DATE
+            AS VATGENDATE,
+
+            SUBSTR(CHG2.DEAL_NO,3,5)
+            || SUBSTR(CHG2.DEAL_NO,8)
+            ||
+            CASE
+                WHEN SUBSTR(CHG2.DEAL_NO,3,3)='860'
+                    THEN 'BEI'
+                WHEN SUBSTR(CHG2.DEAL_NO,3,3)='870'
+                    THEN 'SHA'
+                WHEN SUBSTR(CHG2.DEAL_NO,3,3)='880'
+                    THEN 'GUA'
+                ELSE 'UNKNOWN'
+            END
+            AS DEALID,
+
+            STP.ACTUAL_REL_DATE
+            AS DEALTRANSDATE,
+
+            STP.ACTUAL_REL_DATE
+            AS DEALACCOUNTINGDATE,
+
+            CL.CUSTOMERID AS CUSTOMERID,
+
+            RT.TCCFCODE AS REVENUETYPE
+
+        FROM %s.IXQDBCHG CHG2
+
+        INNER JOIN %s.IXQDBSTP STP
+                ON CHG2.DEAL_NO = STP.DEAL_NO
+
+        LEFT JOIN REVENUE_TYPE RT
+               ON RT.TCCODE =
+                  CHG2.ENTITY || CHG2.CHARGE_ID
+
+        LEFT JOIN CUSTOMER_LOOKUP CL
+               ON CL.DEAL_NO = CHG2.DEAL_NO
+              AND CL.RN = 1
+
+        WHERE CHG2.ENTITY = '022'
+
+          AND STP.ACTUAL_REL_DATE
+              BETWEEN :processingDateStart
+                  AND :processingDateEnd
+
+        ORDER BY STP.ACTUAL_REL_DATE
+
+        OFFSET :offset ROWS
+        FETCH NEXT :pageSize ROWS ONLY
+        """;
+}
+
+public final class VatCountSql {
+
+    private VatCountSql() {
+    }
+
+    public static final String SQL = """
+        SELECT COUNT(*)
+
+        FROM %s.IXQDBCHG CHG2
+
+        INNER JOIN %s.IXQDBSTP STP
+                ON CHG2.DEAL_NO = STP.DEAL_NO
+
+        WHERE CHG2.ENTITY = '022'
+
+          AND STP.ACTUAL_REL_DATE
+              BETWEEN :processingDateStart
+                  AND :processingDateEnd
+        """;
+}
+
+public final class VatSqlQueries {
+
+    private VatSqlQueries() {
+    }
+
+    public static String buildMainQuery(
+            String ptrk,
+            String ixpk) {
+
+        return "WITH "
+                + String.format(
+                        RevenueTypeSql.SQL,
+                        ptrk)
+
+                + ","
+
+                + String.format(
+                        CustomerLookupSql.SQL,
+                        ixpk,
+                        ixpk,
+                        ixpk,
+                        ixpk,
+                        ixpk,
+                        ixpk,
+                        ixpk)
+
+                + String.format(
+                        VatExtractionSql.SQL,
+                        ixpk,
+                        ixpk);
+    }
+
+    public static String buildCountQuery(
+            String ixpk) {
+
+        return String.format(
+                VatCountSql.SQL,
+                ixpk,
+                ixpk);
+    }
+}
+
+@Getter
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class VatRow {
+
+    private String vatRefId;
+    private Integer vatGenDate;
+    private String dealId;
+    private Integer dealTransDate;
+    private Integer dealAccountingDate;
+    private String reverse;
+    private String originalVatRefId;
+    private BigDecimal vatRate;
+    private String originalCurrency;
+    private BigDecimal totalAmount;
+    private BigDecimal taxAmount;
+    private BigDecimal amountAfterVat;
+    private String targetCurrency;
+    private BigDecimal convertRate;
+    private BigDecimal convertedTotalAmount;
+    private BigDecimal convertedTaxAmount;
+    private BigDecimal convertedAmountAfterVat;
+    private String revenueType;
+    private String customerId;
+}
+
+public interface VatNativeRepository {
+
+    List<VatRow> findVatRecords(
+            VatSearchCriteria criteria);
+
+    Long countVatRecords(
+            VatSearchCriteria criteria);
+}
+
+@Repository
+@RequiredArgsConstructor
+public class VatNativeRepositoryImpl
+        implements VatNativeRepository {
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    private final VatProperties vatProperties;
+
+    @Override
+    public List<VatRow> findVatRecords(
+            VatSearchCriteria criteria) {
+
+        String sql =
+                VatSqlQueries.buildMainQuery(
+                        vatProperties.getPtrk(),
+                        vatProperties.getIxpk());
+
+        Query query =
+                entityManager.createNativeQuery(sql);
+
+        query.setParameter(
+                "processingDateStart",
+                criteria.getProcessingDateStart());
+
+        query.setParameter(
+                "processingDateEnd",
+                criteria.getProcessingDateEnd());
+
+        query.setParameter(
+                "offset",
+                criteria.getPageNo()
+                        * criteria.getPageSize());
+
+        query.setParameter(
+                "pageSize",
+                criteria.getPageSize());
+
+        List<Object[]> rows =
+                query.getResultList();
+
+        return mapRows(rows);
+    }
+
+    @Override
+    public Long countVatRecords(
+            VatSearchCriteria criteria) {
+
+        String sql =
+                VatSqlQueries.buildCountQuery(
+                        vatProperties.getIxpk());
+
+        Query query =
+                entityManager.createNativeQuery(sql);
+
+        query.setParameter(
+                "processingDateStart",
+                criteria.getProcessingDateStart());
+
+        query.setParameter(
+                "processingDateEnd",
+                criteria.getProcessingDateEnd());
+
+        Number count =
+                (Number) query.getSingleResult();
+
+        return count.longValue();
+    }
+
+    private List<VatRow> mapRows(
+            List<Object[]> result) {
+
+        List<VatRow> rows =
+                new ArrayList<>();
+
+        for (Object[] row : result) {
+
+            rows.add(
+                    VatRow.builder()
+                            .vatRefId(
+                                    (String) row[0])
+                            .build());
+        }
+
+        return rows;
+    }
+}
+
+@Slf4j
+@Repository
+@RequiredArgsConstructor
+public class VatRepositoryAdaptor implements VatRepository {
+
+private final NamedParameterJdbcTemplate db2NamedParameterJdbcTemplate;
+
+private final VatProperties vatProperties;
+
+private final VatRowMapper vatRowMapper;
+
+@Override
+public VatResponse findVatRecords(
+        VatSearchCriteria criteria) {
+
+    String mainQuery =
+            VatSqlQueries.buildMainQuery(
+                    vatProperties.getPtrk(),
+                    vatProperties.getIxpk());
+
+    String countQuery =
+            VatSqlQueries.buildCountQuery(
+                    vatProperties.getIxpk());
+
+    MapSqlParameterSource params =
+            new MapSqlParameterSource()
+                    .addValue(
+                            "processingDateStart",
+                            criteria.getProcessingDateStart())
+                    .addValue(
+                            "processingDateEnd",
+                            criteria.getProcessingDateEnd())
+                    .addValue(
+                            "offset",
+                            criteria.getPageNo()
+                                    * criteria.getPageSize())
+                    .addValue(
+                            "pageSize",
+                            criteria.getPageSize());
+
+    List<VatEntry> entries =
+            db2NamedParameterJdbcTemplate.query(
+                    mainQuery,
+                    params,
+                    vatRowMapper);
+
+    Long totalRecords =
+            db2NamedParameterJdbcTemplate.queryForObject(
+                    countQuery,
+                    params,
+                    Long.class);
+
+    int totalPages =
+            (int) Math.ceil(
+                    (double) totalRecords
+                            / criteria.getPageSize());
+
+    return VatResponse.builder()
+            .entries(entries)
+            .paging(
+                    Paging.builder()
+                            .totalRecord(totalRecords)
+                            .pageNo(criteria.getPageNo())
+                            .pageSize(criteria.getPageSize())
+                            .totalPage(totalPages)
+                            .build())
+            .build();
+}
+
+}
+
+@Configuration
+@RequiredArgsConstructor
+public class DB2DataSourceConfiguration {
+
+    @Bean
+    @ConfigurationProperties("db2.datasource")
+    public DataSourceProperties db2DataSourceProperties() {
+        return new DataSourceProperties();
+    }
+
+    @Bean(name = "db2DataSource")
+    public DataSource db2DataSource() {
+
+        return db2DataSourceProperties()
+                .initializeDataSourceBuilder()
+                .build();
+    }
+
+    @Bean(name = "db2NamedParameterJdbcTemplate")
+    public NamedParameterJdbcTemplate db2NamedParameterJdbcTemplate(
+            @Qualifier("db2DataSource")
+            DataSource dataSource) {
+
+        return new NamedParameterJdbcTemplate(dataSource);
+    }
+}
