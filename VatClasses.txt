@@ -1,0 +1,761 @@
+@Getter
+@Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class Vat {
+
+    private String VATREFID;
+
+    private BigDecimal VATGenDate;
+
+    private String DealId;
+
+    private BigDecimal DealTransDate;
+
+    private BigDecimal DealAccountingDate;
+
+    private Boolean REVERSE;
+
+    private String ORIGINALVATREFID;
+
+    private BigDecimal VATRate;
+
+    private String OriginalCurrency;
+
+    private BigDecimal TotalAmount;
+
+    private BigDecimal TaxAmount;
+
+    private BigDecimal AmountAfterVAT;
+
+    private String TargetCurrency;
+
+    private BigDecimal ConvertRate;
+
+    private BigDecimal ConvertedTotalAmount;
+
+    private BigDecimal ConvertedTaxAmount;
+
+    private BigDecimal ConvertedAmountAfterVAT;
+
+    private String RevenueType;
+
+    private String CustomerID;
+}
+
+
+@Getter
+@Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class Paging {
+
+    private Long totalRecord;
+
+    private Integer pageNo;
+
+    private Integer totalPage;
+
+    private Integer pageSize;
+}
+
+
+@Getter
+@Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class VatResponse {
+
+    private List<Vat> entries;
+
+    private Paging paging;
+}
+
+
+@Getter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class VatCommand {
+
+    private Integer processingDateStart;
+
+    private Integer processingDateEnd;
+
+    private Integer pageNo;
+
+    private Integer pageSize;
+}
+
+
+
+public interface VatRepository {
+
+    List<Vat> findVatData(
+            VatCommand command);
+
+    Long countVatData(
+            VatCommand command);
+}
+
+
+
+public interface VatService {
+
+    VatResponse getVatData(
+            VatCommand command);
+}
+
+
+@RestController
+@RequestMapping("/vat")
+@RequiredArgsConstructor
+public class VatController {
+
+    private final VatService vatService;
+
+    @GetMapping
+    public ResponseEntity<VatResponse> getVatData(
+            @RequestParam Integer processingDateStart,
+            @RequestParam Integer processingDateEnd,
+            @RequestParam(defaultValue = "0") Integer pageNo,
+            @RequestParam(defaultValue = "100") Integer pageSize) {
+
+        VatCommand command =
+                VatCommand.builder()
+                        .processingDateStart(processingDateStart)
+                        .processingDateEnd(processingDateEnd)
+                        .pageNo(pageNo)
+                        .pageSize(pageSize)
+                        .build();
+
+        return ResponseEntity.ok(
+                vatService.getVatData(command));
+    }
+}
+
+
+
+@RequiredArgsConstructor
+public class DefaultVatService implements VatService {
+
+    private final VatRepository vatRepository;
+
+    @Override
+    public VatResponse getVatData(
+            VatCommand command) {
+
+        List<Vat> vatEntries =
+                vatRepository.findVatData(command);
+
+        Long totalRecords =
+                vatRepository.countVatData(command);
+
+        Paging paging =
+                buildPaging(
+                        totalRecords,
+                        command.getPageNo(),
+                        command.getPageSize());
+
+        return VatResponse.builder()
+                .entries(vatEntries)
+                .paging(paging)
+                .build();
+    }
+
+    private Paging buildPaging(
+            Long totalRecords,
+            Integer pageNo,
+            Integer pageSize) {
+
+        int totalPages =
+                (int) Math.ceil(
+                        (double) totalRecords
+                                / pageSize);
+
+        return Paging.builder()
+                .totalRecord(totalRecords)
+                .pageNo(pageNo)
+                .pageSize(pageSize)
+                .totalPage(totalPages)
+                .build();
+    }
+}
+
+
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class VatRepositoryAdaptor implements VatRepository {
+
+    private final VatJdbcRepository vatJdbcRepository;
+
+@Override
+public List<Vat> findVatData(VatCommand command) {
+
+    log.info(
+        "VAT Query Start Date={}, End Date={}, PageNo={}, PageSize={}",
+        command.getProcessingDateStart(),
+        command.getProcessingDateEnd(),
+        command.getPageNo(),
+        command.getPageSize());
+
+    long startTime = System.currentTimeMillis();
+
+    List<Vat> result =
+            vatJdbcRepository.findVatData(command);
+
+    long endTime = System.currentTimeMillis();
+
+    log.info(
+        "VAT Query fetched {} records in {} ms",
+        result.size(),
+        (endTime - startTime));
+
+    return result;
+}
+
+    @Override
+    public Long countVatData(VatCommand command) {
+
+        long startTime = System.currentTimeMillis();
+
+        Long count =
+                vatJdbcRepository.countVatData(command);
+
+        long endTime = System.currentTimeMillis();
+
+        log.info(
+                "VAT Count Query completed in {} ms",
+                (endTime - startTime));
+
+        return count;
+    }
+}
+
+
+@Component
+public class VatRowMapper implements RowMapper<Vat> {
+
+    @Override
+    public Vat mapRow(
+            ResultSet rs,
+            int rowNum)
+            throws SQLException {
+
+        return Vat.builder()
+                .VATREFID(
+                        rs.getString("VATREFID"))
+                .VATGenDate(
+                        getInteger(rs, "VATGenDate"))
+                .DealId(
+                        rs.getString("DealId"))
+                .DealTransDate(
+                        getInteger(rs, "DealTransDate"))
+                .DealAccountingDate(
+                        getInteger(rs, "DealAccountingDate"))
+                .REVERSE(
+                        convertBoolean(
+                                rs.getString("REVERSE")))
+                .ORIGINALVATREFID(
+                        rs.getString("ORIGINALVATREFID"))
+                .VATRate(
+                        rs.getBigDecimal("VATRate"))
+                .OriginalCurrency(
+                        rs.getString("OriginalCurrency"))
+                .TotalAmount(
+                        rs.getBigDecimal("TotalAmount"))
+                .TaxAmount(
+                        rs.getBigDecimal("TaxAmount"))
+                .AmountAfterVAT(
+                        rs.getBigDecimal("AmountAfterVAT"))
+                .TargetCurrency(
+                        rs.getString("TargetCurrency"))
+                .ConvertRate(
+                        rs.getBigDecimal("ConvertRate"))
+                .ConvertedTotalAmount(
+                        rs.getBigDecimal("ConvertedTotalAmount"))
+                .ConvertedTaxAmount(
+                        rs.getBigDecimal("ConvertedTaxAmount"))
+                .ConvertedAmountAfterVAT(
+                        rs.getBigDecimal("ConvertedAmountAfterVAT"))
+                .RevenueType(
+                        rs.getString("RevenueType"))
+                .CustomerID(
+                        rs.getString("CustomerID"))
+                .build();
+    }
+
+    private Integer getInteger(
+            ResultSet rs,
+            String column)
+            throws SQLException {
+
+        Object value = rs.getObject(column);
+
+        if (value == null) {
+            return null;
+        }
+
+        return ((Number) value).intValue();
+    }
+
+    private Boolean convertBoolean(
+            String value) {
+
+        return "TRUE".equalsIgnoreCase(value);
+    }
+}
+
+
+@Configuration
+public class VatConfiguration {
+
+    @Bean
+    public VatService vatService(
+            VatRepository vatRepository) {
+
+        return new DefaultVatService(vatRepository);
+    }
+}
+
+
+@Slf4j
+@Repository
+public class VatJdbcRepository {
+
+private final NamedParameterJdbcTemplate jdbcTemplate;
+private final VatRowMapper vatRowMapper;
+
+@Value("${IMEX_SCHEMA}")
+private String imexSchema;
+
+@Value("${PETRA_SCHEMA}")
+private String petraSchema;
+
+public VatJdbcRepository(
+        @Qualifier("db2NamedParameterJdbcTemplate")
+        NamedParameterJdbcTemplate jdbcTemplate,
+        VatRowMapper vatRowMapper) {
+
+    this.jdbcTemplate = jdbcTemplate;
+    this.vatRowMapper = vatRowMapper;
+}
+
+public List<Vat> findVatData(
+        VatCommand command) {
+
+    MapSqlParameterSource params =
+            buildParameters(command);
+
+    String query =
+            VatSqlQueries.getVatQuery(
+                    imexSchema,
+                    petraSchema);
+
+    log.info(
+            "VAT Query Start Date={}, End Date={}, PageNo={}, PageSize={}",
+            command.getProcessingDateStart(),
+            command.getProcessingDateEnd(),
+            command.getPageNo(),
+            command.getPageSize());
+
+    long startTime =
+            System.currentTimeMillis();
+
+    List<Vat> result =
+            jdbcTemplate.query(
+                    query,
+                    params,
+                    vatRowMapper);
+
+    long executionTime =
+            System.currentTimeMillis() - startTime;
+
+    log.info(
+            "VAT Query fetched {} records in {} ms",
+            result.size(),
+            executionTime);
+
+    return result;
+}
+
+public Long countVatData(
+        VatCommand command) {
+
+    MapSqlParameterSource params =
+            buildParameters(command);
+
+    String query =
+            VatSqlQueries.getVatCountQuery(
+                    imexSchema);
+
+    long startTime =
+            System.currentTimeMillis();
+
+    Long count =
+            jdbcTemplate.queryForObject(
+                    query,
+                    params,
+                    Long.class);
+
+    long executionTime =
+            System.currentTimeMillis() - startTime;
+
+    log.info(
+            "VAT Count Query completed in {} ms",
+            executionTime);
+
+    return count;
+}
+
+private MapSqlParameterSource buildParameters(
+        VatCommand command) {
+
+    int offset =
+            command.getPageNo()
+                    * command.getPageSize();
+
+    return new MapSqlParameterSource()
+            .addValue(
+                    "processingDateStart",
+                    command.getProcessingDateStart())
+            .addValue(
+                    "processingDateEnd",
+                    command.getProcessingDateEnd())
+            .addValue(
+                    "offset",
+                    offset)
+            .addValue(
+                    "pageSize",
+                    command.getPageSize());
+}
+
+}
+
+
+
+
+
+
+package com.yourorg.infrastructure.vat.repository;
+
+public final class VatSqlQueries {
+
+    private VatSqlQueries() {
+    }
+
+    public static String getVatQuery(
+            String imexSchema,
+            String petraSchema) {
+
+        return """
+            WITH REVENUE_TYPE AS (
+    SELECT
+        TCCODE,
+        TCCFCODE
+    FROM %s.PTR0140VM
+)
+
+SELECT
+
+    CHG2.DEAL_NO
+    || CHG2.STEP_TYPE
+    || CHG2.STEP_NO
+    || CHG2.CHARGE_ID
+        AS VATREFID,
+
+    STP.ACTUAL_REL_DATE
+        AS VATGenDate,
+
+    SUBSTR(CHG2.DEAL_NO, 3, 5)
+    || SUBSTR(CHG2.DEAL_NO, 8)
+    ||
+    CASE
+        WHEN SUBSTR(CHG2.DEAL_NO, 3, 3) = '860'
+            THEN 'BEI'
+        WHEN SUBSTR(CHG2.DEAL_NO, 3, 3) = '870'
+            THEN 'SHA'
+        WHEN SUBSTR(CHG2.DEAL_NO, 3, 3) = '880'
+            THEN 'GUA'
+        ELSE 'UNKNOWN'
+    END
+        AS DealId,
+
+    STP.ACTUAL_REL_DATE
+        AS DealTransDate,
+
+    STP.ACTUAL_REL_DATE
+        AS DealAccountingDate,
+
+    CASE
+        WHEN (
+            CHG2.STEP_TYPE = 'MSC'
+            AND STP.FIN_BATCH = 'AA'
+        )
+        THEN 'TRUE'
+
+        WHEN CHG2.CHARGE_ID IN (
+            '802227',
+            '802226',
+            '80997'
+        )
+        AND CHG2.STEP_TYPE = 'MSC'
+        AND STP.FIN_BATCH IN (
+            'RD',
+            'AM'
+        )
+        THEN 'TRUE'
+
+        ELSE 'FALSE'
+    END
+        AS REVERSE,
+
+    CASE
+        WHEN (
+            CHG2.STEP_TYPE = 'MSC'
+            AND STP.FIN_BATCH IN (
+                'AA',
+                'RD',
+                'AM'
+            )
+        )
+        THEN CHG2.DEAL_NO
+             || STP.REF_STEP_ID
+             || CHG2.CHARGE_ID
+
+        ELSE NULL
+    END
+        AS ORIGINALVATREFID,
+
+    CCM.FIXED_PERCENT
+        AS VATRate,
+
+    CASE
+        WHEN NULLIF(
+            TRIM(CHG2.DR_CALC_CURR),
+            ''
+        ) IS NOT NULL
+        THEN CHG2.DR_CALC_CURR
+
+        ELSE CHG2.CR_CALC_CURR
+    END
+        AS OriginalCurrency,
+
+    CHG2.CHARGE_AMT
+        AS TotalAmount,
+
+    CHG_VAT.CHARGE_AMT
+        AS TaxAmount,
+
+    (
+        CHG2.CHARGE_AMT
+        - CHG_VAT.CHARGE_AMT
+    )
+        AS AmountAfterVAT,
+
+    'CNY'
+        AS TargetCurrency,
+
+    CASE
+        WHEN (
+            CASE
+                WHEN NULLIF(
+                    TRIM(CHG2.DR_CALC_CURR),
+                    ''
+                ) IS NOT NULL
+                THEN CHG2.DR_CALC_CURR
+                ELSE CHG2.CR_CALC_CURR
+            END
+        ) = 'CNY'
+        THEN NULL
+
+        ELSE COALESCE(
+            CHG_PRINCIPAL.DR_LOC_EXCH_RATE,
+            CHG2.DR_LOC_EXCH_RATE
+        )
+    END
+        AS ConvertRate,
+
+    CHG2.CHARGE_AMT
+    *
+    CASE
+        WHEN (
+            CASE
+                WHEN NULLIF(
+                    TRIM(CHG2.DR_CALC_CURR),
+                    ''
+                ) IS NOT NULL
+                THEN CHG2.DR_CALC_CURR
+                ELSE CHG2.CR_CALC_CURR
+            END
+        ) = 'CNY'
+        THEN NULL
+
+        ELSE COALESCE(
+            CHG_PRINCIPAL.DR_LOC_EXCH_RATE,
+            CHG2.DR_LOC_EXCH_RATE
+        )
+    END
+        AS ConvertedTotalAmount,
+
+    CHG_VAT.CHARGE_AMT
+    *
+    CASE
+        WHEN (
+            CASE
+                WHEN NULLIF(
+                    TRIM(CHG2.DR_CALC_CURR),
+                    ''
+                ) IS NOT NULL
+                THEN CHG2.DR_CALC_CURR
+                ELSE CHG2.CR_CALC_CURR
+            END
+        ) = 'CNY'
+        THEN NULL
+
+        ELSE COALESCE(
+            CHG_PRINCIPAL.DR_LOC_EXCH_RATE,
+            CHG2.DR_LOC_EXCH_RATE
+        )
+    END
+        AS ConvertedTaxAmount,
+
+    (
+        CHG2.CHARGE_AMT
+        - CHG_VAT.CHARGE_AMT
+    )
+    *
+    CASE
+        WHEN (
+            CASE
+                WHEN NULLIF(
+                    TRIM(CHG2.DR_CALC_CURR),
+                    ''
+                ) IS NOT NULL
+                THEN CHG2.DR_CALC_CURR
+                ELSE CHG2.CR_CALC_CURR
+            END
+        ) = 'CNY'
+        THEN NULL
+
+        ELSE COALESCE(
+            CHG_PRINCIPAL.DR_LOC_EXCH_RATE,
+            CHG2.DR_LOC_EXCH_RATE
+        )
+    END
+        AS ConvertedAmountAfterVAT,
+
+    RT.TCCFCODE
+        AS RevenueType,
+
+    MAX(
+        COALESCE(
+            CST.CIF_ID,
+            EXG.BIF_ID
+        )
+    )
+    OVER (
+        PARTITION BY CHG2.DEAL_NO
+    )
+        AS CustomerID
+
+FROM %s.IXQDBCHG CHG2
+
+INNER JOIN %s.IXQDBSTP STP
+    ON CHG2.DEAL_NO = STP.DEAL_NO
+   AND CHG2.STEP_TYPE = SUBSTR(STP.STEP_ID, 1, 3)
+   AND CHG2.STEP_NO = SUBSTR(STP.STEP_ID, 4)
+
+LEFT JOIN %s.IXQDBCCM CCM
+    ON CCM.ENTITY = CHG2.ENTITY
+   AND CCM.COMM_ID = '800200'
+
+INNER JOIN %s.IXQDBCHG CHG_VAT
+    ON CHG2.DEAL_NO = CHG_VAT.DEAL_NO
+   AND CHG_VAT.CHARGE_ID = '800200'
+   AND CHG2.SERIAL_NO_FOR_VAT =
+       CHG_VAT.CHARGE_SERIAL_NO
+   AND CHG2.CHARGE_WHEN = 'N'
+
+LEFT JOIN %s.IXQDBCHG CHG_PRINCIPAL
+    ON CHG_PRINCIPAL.ENTITY = CHG2.ENTITY
+   AND CHG_PRINCIPAL.DEAL_NO = CHG2.DEAL_NO
+   AND CHG_PRINCIPAL.STEP_TYPE
+       || CHG_PRINCIPAL.STEP_NO =
+       STP.REF_STEP_ID
+   AND CHG_PRINCIPAL.CHARGE_ID =
+       CHG2.CHARGE_ID
+   AND CHG_PRINCIPAL.CHARGE_WHEN = 'N'
+   AND CHG_PRINCIPAL.DR_LOC_EXCH_RATE <> 0
+
+LEFT JOIN REVENUE_TYPE RT
+    ON RT.TCCODE =
+       CHG2.ENTITY || CHG2.CHARGE_ID
+
+LEFT JOIN %s.IXQDBDPR DPR
+    ON DPR.DEAL_NO = CHG2.DEAL_NO
+   AND DPR.STEP_ID = 'ISS000'
+
+LEFT JOIN %s.IXQDBCST CST
+    ON DPR.PARTY_CODE = 'APP'
+   AND DPR.CUSTOMER_ID = CST.CUSTOMER_ID
+
+LEFT JOIN %s.IXQDBEXG EXG
+    ON DPR.PARTY_CODE = 'REQ'
+   AND DPR.PARTY_ID = EXG.PARTY_ID
+   AND DPR.PARTY_EXT = EXG.EXT_NO
+
+WHERE CHG2.ENTITY = '022'
+
+AND STP.ACTUAL_REL_DATE
+    BETWEEN :processingDateStart
+        AND :processingDateEnd
+
+ORDER BY
+    STP.ACTUAL_REL_DATE,
+    CHG2.DEAL_NO
+
+OFFSET :offset ROWS
+FETCH FIRST :pageSize ROWS ONLY
+            """
+                .formatted(
+                        petraSchema,
+                        imexSchema,
+                        imexSchema,
+                        imexSchema,
+                        imexSchema,
+                        imexSchema,
+                        imexSchema);
+    }
+
+    public static String getVatCountQuery(
+            String imexSchema) {
+
+        return """
+            SELECT COUNT(*)
+
+            FROM %s.IXQDBCHG CHG2
+
+            INNER JOIN %s.IXQDBSTP STP
+                ON CHG2.DEAL_NO = STP.DEAL_NO
+                AND CHG2.STEP_TYPE =
+                    SUBSTR(STP.STEP_ID,1,3)
+                AND CHG2.STEP_NO =
+                    SUBSTR(STP.STEP_ID,4)
+
+            WHERE CHG2.ENTITY = '022'
+
+            AND STP.ACTUAL_REL_DATE
+                BETWEEN :processingDateStart
+                    AND :processingDateEnd
+            """
+                .formatted(
+                        imexSchema,
+                        imexSchema);
+    }
+}
