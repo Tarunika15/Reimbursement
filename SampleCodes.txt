@@ -1,0 +1,677 @@
+@Getter
+@Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class VatRawData {
+
+    private String dealNo;
+    private String stepType;
+    private String stepNo;
+    private String chargeId;
+
+    private Integer actualRelDate;
+
+    private String finBatch;
+    private String refStepId;
+
+    private BigDecimal vatRate;
+
+    private String drCalcCurr;
+    private String crCalcCurr;
+
+    private BigDecimal chargeAmt;
+    private BigDecimal taxAmount;
+
+    private BigDecimal exchangeRate;
+
+    private String revenueType;
+
+    private String customerId;
+}
+
+@Component
+public class VatAssembler {
+
+    public Vat map(VatRawData raw) {
+
+        BigDecimal amountAfterVat =
+                calculateAmountAfterVat(raw);
+
+        BigDecimal convertRate =
+                calculateConvertRate(raw);
+
+        return Vat.builder()
+                .VATREFID(buildVatRefId(raw))
+                .VATGenDate(raw.getActualRelDate())
+                .DealId(buildDealId(raw.getDealNo()))
+                .DealTransDate(raw.getActualRelDate())
+                .DealAccountingDate(raw.getActualRelDate())
+                .REVERSE(buildReverse(raw))
+                .ORIGINALVATREFID(buildOriginalVatRefId(raw))
+                .VATRate(raw.getVatRate())
+                .OriginalCurrency(buildCurrency(raw))
+                .TotalAmount(raw.getChargeAmt())
+                .TaxAmount(raw.getTaxAmount())
+                .AmountAfterVAT(amountAfterVat)
+                .TargetCurrency("CNY")
+                .ConvertRate(convertRate)
+                .ConvertedTotalAmount(
+                        multiply(
+                                raw.getChargeAmt(),
+                                convertRate))
+                .ConvertedTaxAmount(
+                        multiply(
+                                raw.getTaxAmount(),
+                                convertRate))
+                .ConvertedAmountAfterVAT(
+                        multiply(
+                                amountAfterVat,
+                                convertRate))
+                .RevenueType(raw.getRevenueType())
+                .CustomerID(raw.getCustomerId())
+                .build();
+    }
+
+    private String buildVatRefId(VatRawData raw) {
+
+        return raw.getDealNo()
+                + raw.getStepType()
+                + raw.getStepNo()
+                + raw.getChargeId();
+    }
+
+    private String buildDealId(String dealNo) {
+
+        String location;
+
+        String branch =
+                dealNo.substring(2, 5);
+
+        switch (branch) {
+
+            case "860":
+                location = "BEI";
+                break;
+
+            case "870":
+                location = "SHA";
+                break;
+
+            case "880":
+                location = "GUA";
+                break;
+
+            default:
+                location = "UNKNOWN";
+        }
+
+        return dealNo.substring(2, 7)
+                + dealNo.substring(7)
+                + location;
+    }
+
+    private Boolean buildReverse(VatRawData raw) {
+
+        if ("MSC".equals(raw.getStepType())
+                && "AA".equals(raw.getFinBatch())) {
+
+            return true;
+        }
+
+        return List.of(
+                "802227",
+                "802226",
+                "80997")
+                .contains(raw.getChargeId())
+                && "MSC".equals(raw.getStepType())
+                && List.of(
+                        "RD",
+                        "AM")
+                        .contains(raw.getFinBatch());
+    }
+
+    private String buildOriginalVatRefId(
+            VatRawData raw) {
+
+        if ("MSC".equals(raw.getStepType())
+                && List.of(
+                        "AA",
+                        "RD",
+                        "AM")
+                        .contains(raw.getFinBatch())) {
+
+            return raw.getDealNo()
+                    + raw.getRefStepId()
+                    + raw.getChargeId();
+        }
+
+        return null;
+    }
+
+    private String buildCurrency(
+            VatRawData raw) {
+
+        return raw.getDrCalcCurr() != null
+                && !raw.getDrCalcCurr().isBlank()
+                ? raw.getDrCalcCurr()
+                : raw.getCrCalcCurr();
+    }
+
+    private BigDecimal calculateAmountAfterVat(
+            VatRawData raw) {
+
+        return raw.getChargeAmt()
+                .subtract(raw.getTaxAmount());
+    }
+
+    private BigDecimal calculateConvertRate(
+            VatRawData raw) {
+
+        if ("CNY".equals(buildCurrency(raw))) {
+            return null;
+        }
+
+        return raw.getExchangeRate();
+    }
+
+    private BigDecimal multiply(
+            BigDecimal amount,
+            BigDecimal rate) {
+
+        if (amount == null || rate == null) {
+            return null;
+        }
+
+        return amount.multiply(rate);
+    }
+}
+
+@Component
+public class VatRawDataRowMapper
+        implements RowMapper<VatRawData> {
+
+    @Override
+    public VatRawData mapRow(
+            ResultSet rs,
+            int rowNum)
+            throws SQLException {
+
+        return VatRawData.builder()
+                .dealNo(rs.getString("DEAL_NO"))
+                .stepType(rs.getString("STEP_TYPE"))
+                .stepNo(rs.getString("STEP_NO"))
+                .chargeId(rs.getString("CHARGE_ID"))
+                .actualRelDate(
+                        rs.getInt("ACTUAL_REL_DATE"))
+                .finBatch(
+                        rs.getString("FIN_BATCH"))
+                .refStepId(
+                        rs.getString("REF_STEP_ID"))
+                .vatRate(
+                        rs.getBigDecimal("VAT_RATE"))
+                .drCalcCurr(
+                        rs.getString("DR_CALC_CURR"))
+                .crCalcCurr(
+                        rs.getString("CR_CALC_CURR"))
+                .chargeAmt(
+                        rs.getBigDecimal("CHARGE_AMT"))
+                .taxAmount(
+                        rs.getBigDecimal("TAX_AMOUNT"))
+                .exchangeRate(
+                        rs.getBigDecimal("EXCHANGE_RATE"))
+                .revenueType(
+                        rs.getString("REVENUE_TYPE"))
+                .customerId(
+                        rs.getString("CUSTOMER_ID"))
+                .build();
+    }
+}
+
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class DefaultVatService implements VatService {
+
+private final VatRepository vatRepository;
+
+private final VatAssembler vatAssembler;
+
+@Override
+public VatResponse getVatData(
+        VatCommand command) {
+
+    long startTime =
+            System.currentTimeMillis();
+
+    List<VatRawData> rawData =
+            vatRepository.findVatData(command);
+
+    List<Vat> entries =
+            rawData.stream()
+                    .map(vatAssembler::map)
+                    .toList();
+
+    Long totalRecords =
+            vatRepository.countVatData(command);
+
+    Paging paging =
+            buildPaging(
+                    totalRecords,
+                    command.getPageNo(),
+                    command.getPageSize());
+
+    log.info(
+            "Complete VAT Service execution took {} ms",
+            System.currentTimeMillis() - startTime);
+
+    return VatResponse.builder()
+            .entries(entries)
+            .paging(paging)
+            .build();
+}
+
+private Paging buildPaging(
+        Long totalRecords,
+        Integer pageNo,
+        Integer pageSize) {
+
+    long totalPages =
+            totalRecords == null || totalRecords == 0
+                    ? 0
+                    : (long) Math.ceil(
+                            (double) totalRecords
+                                    / pageSize);
+
+    return Paging.builder()
+            .totalRecord(totalRecords)
+            .pageNo(pageNo)
+            .pageSize(pageSize)
+            .totalPage((int) totalPages)
+            .build();
+}
+
+}
+
+
+@Slf4j
+@Repository
+public class VatJdbcRepository {
+
+private final NamedParameterJdbcTemplate jdbcTemplate;
+
+private final VatRawDataRowMapper vatRawDataRowMapper;
+
+@Value("${IMEX_SCHEMA}")
+private String imexSchema;
+
+@Value("${PETRA_SCHEMA}")
+private String petraSchema;
+
+public VatJdbcRepository(
+        @Qualifier("db2NamedParameterJdbcTemplate")
+        NamedParameterJdbcTemplate jdbcTemplate,
+        VatRawDataRowMapper vatRawDataRowMapper) {
+
+    this.jdbcTemplate = jdbcTemplate;
+    this.vatRawDataRowMapper = vatRawDataRowMapper;
+}
+
+public List<VatRawData> findVatData(
+        VatCommand command) {
+
+    MapSqlParameterSource params =
+            buildParameters(command);
+
+    String query =
+            VatSqlQueries.getVatQuery(
+                    imexSchema,
+                    petraSchema);
+
+    log.info(
+            "VAT Query Start Date={}, End Date={}, PageNo={}, PageSize={}",
+            command.getProcessingDateStart(),
+            command.getProcessingDateEnd(),
+            command.getPageNo(),
+            command.getPageSize());
+
+    long startTime =
+            System.currentTimeMillis();
+
+    List<VatRawData> result =
+            jdbcTemplate.query(
+                    query,
+                    params,
+                    vatRawDataRowMapper);
+
+    log.info(
+            "VAT Query fetched {} records in {} ms",
+            result.size(),
+            System.currentTimeMillis() - startTime);
+
+    return result;
+}
+
+public Long countVatData(
+        VatCommand command) {
+
+    MapSqlParameterSource params =
+            buildParameters(command);
+
+    String query =
+            VatSqlQueries.getVatCountQuery(
+                    imexSchema,
+                    petraSchema);
+
+    long startTime =
+            System.currentTimeMillis();
+
+    Long count =
+            jdbcTemplate.queryForObject(
+                    query,
+                    params,
+                    Long.class);
+
+    log.info(
+            "VAT Count Query completed in {} ms",
+            System.currentTimeMillis() - startTime);
+
+    return count;
+}
+
+private MapSqlParameterSource buildParameters(
+        VatCommand command) {
+
+    int offset =
+            command.getPageNo()
+                    * command.getPageSize();
+
+    return new MapSqlParameterSource()
+            .addValue(
+                    "processingDateStart",
+                    command.getProcessingDateStart())
+            .addValue(
+                    "processingDateEnd",
+                    command.getProcessingDateEnd())
+            .addValue(
+                    "offset",
+                    offset)
+            .addValue(
+                    "pageSize",
+                    command.getPageSize());
+}
+
+}
+
+
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class VatRepositoryAdaptor
+implements VatRepository {
+
+private final VatJdbcRepository
+        vatJdbcRepository;
+
+@Override
+public List<VatRawData> findVatData(
+        VatCommand command) {
+
+    long startTime =
+            System.currentTimeMillis();
+
+    List<VatRawData> result =
+            vatJdbcRepository.findVatData(
+                    command);
+
+    log.info(
+            "VAT Data Query completed in {} ms",
+            System.currentTimeMillis()
+                    - startTime);
+
+    return result;
+}
+
+@Override
+public Long countVatData(
+        VatCommand command) {
+
+    long startTime =
+            System.currentTimeMillis();
+
+    Long count =
+            vatJdbcRepository.countVatData(
+                    command);
+
+    log.info(
+            "VAT Count Query completed in {} ms",
+            System.currentTimeMillis()
+                    - startTime);
+
+    return count;
+}
+
+}
+
+
+@Slf4j
+@Component
+public class SqlFileReader {
+
+public String readSql(String path) {
+
+    try (InputStream inputStream =
+                 getClass()
+                         .getClassLoader()
+                         .getResourceAsStream(path)) {
+
+        if (inputStream == null) {
+
+            throw new IllegalArgumentException(
+                    "SQL file not found : "
+                            + path);
+        }
+
+        return new String(
+                inputStream.readAllBytes(),
+                StandardCharsets.UTF_8);
+
+    } catch (IOException ex) {
+
+        throw new RuntimeException(
+                "Unable to read SQL file : "
+                        + path,
+                ex);
+    }
+}
+
+}
+
+
+@Slf4j
+@Repository
+public class VatJdbcRepository {
+
+private final NamedParameterJdbcTemplate jdbcTemplate;
+
+private final VatRawDataRowMapper vatRawDataRowMapper;
+
+private final SqlFileReader sqlFileReader;
+
+@Value("${IMEX_SCHEMA}")
+private String imexSchema;
+
+@Value("${PETRA_SCHEMA}")
+private String petraSchema;
+
+private String vatQuery;
+
+public VatJdbcRepository(
+        @Qualifier("db2NamedParameterJdbcTemplate")
+        NamedParameterJdbcTemplate jdbcTemplate,
+        VatRawDataRowMapper vatRawDataRowMapper,
+        SqlFileReader sqlFileReader) {
+
+    this.jdbcTemplate = jdbcTemplate;
+    this.vatRawDataRowMapper = vatRawDataRowMapper;
+    this.sqlFileReader = sqlFileReader;
+}
+
+@PostConstruct
+public void loadQueries() {
+
+    this.vatQuery =
+            sqlFileReader.readSql(
+                    "sql/vat/vat-query.sql");
+
+    log.info(
+            "VAT Query loaded successfully");
+}
+
+public List<VatRawData> findVatData(
+        VatCommand command) {
+
+    long startTime =
+            System.currentTimeMillis();
+
+    String query =
+            vatQuery
+                    .replace(
+                            "${IMEX_SCHEMA}",
+                            imexSchema)
+                    .replace(
+                            "${PETRA_SCHEMA}",
+                            petraSchema);
+
+    MapSqlParameterSource params =
+            buildParameters(command);
+
+    List<VatRawData> result =
+            jdbcTemplate.query(
+                    query,
+                    params,
+                    vatRawDataRowMapper);
+
+    log.info(
+            "VAT Query executed in {} ms. Records Returned={}",
+            System.currentTimeMillis()
+                    - startTime,
+            result.size());
+
+    return result;
+}
+
+private MapSqlParameterSource buildParameters(
+        VatCommand command) {
+
+    int offset =
+            command.getPageNo()
+                    * command.getPageSize();
+
+    return new MapSqlParameterSource()
+            .addValue(
+                    "processingDateStart",
+                    command.getProcessingDateStart())
+            .addValue(
+                    "processingDateEnd",
+                    command.getProcessingDateEnd())
+            .addValue(
+                    "offset",
+                    offset)
+            .addValue(
+                    "pageSize",
+                    command.getPageSize());
+}
+
+}
+
+
+@RestController
+@RequestMapping("/vat")
+@RequiredArgsConstructor
+@Tag(name = "VAT API", description = "VAT Feed Endpoint")
+public class VatController {
+
+private final VatService vatService;
+
+@GetMapping
+@Operation(
+        summary = "Get VAT Feed",
+        description = "Returns VAT records for the given processing date range")
+responses = {
+
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "VAT feed retrieved successfully",
+                    content = {
+                            @Content(
+                                    mediaType = "application/json",
+                                    schema = @Schema(
+                                            implementation = VatResponse.class))
+                    }),
+
+            @ApiResponse(
+                    responseCode = "401",
+                    description = "Unauthorized, please login",
+                    content = @Content(
+                            schema = @Schema(
+                                    defaultValue =
+                                            "Error: response status is 401"))),
+
+            @ApiResponse(
+                    responseCode = "403",
+                    description = "Forbidden, please check your scope",
+                    content = @Content(
+                            schema = @Schema(
+                                    defaultValue =
+                                            "Error: response status is 403"))),
+
+            @ApiResponse(
+                    responseCode = "500",
+                    description = "Error while retrieving VAT feed",
+                    content = {
+                            @Content(
+                                    mediaType = "application/json",
+                                    schema = @Schema(
+                                            implementation = ErrorMessage.class))
+                    })
+    }
+public ResponseEntity<VatResponse> getVatData(
+
+        @RequestParam
+        Integer processingDateStart,
+
+        @RequestParam
+        Integer processingDateEnd,
+
+        @RequestParam(defaultValue = "0")
+        Integer pageNo,
+
+        @RequestParam(defaultValue = "100")
+        Integer pageSize) {
+
+    VatCommand command =
+            VatCommand.builder()
+                    .processingDateStart(
+                            processingDateStart)
+                    .processingDateEnd(
+                            processingDateEnd)
+                    .pageNo(pageNo)
+                    .pageSize(pageSize)
+                    .build();
+
+    VatResponse response =
+            vatService.getVatData(command);
+
+    if (response.getEntries() == null
+            || response.getEntries().isEmpty()) {
+
+        return ResponseEntity
+                .notFound()
+                .build();
+    }
+
+    return ResponseEntity.ok(response);
+}
