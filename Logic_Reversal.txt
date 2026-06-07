@@ -1,0 +1,48 @@
+private Boolean buildReverse(VatRawData rawData) {
+
+    if (!"MSC".equals(rawData.getStepType())) {
+        return Boolean.FALSE;
+    }
+
+    if ("AA".equals(rawData.getFinBatch())) {
+        return Boolean.TRUE;
+    }
+
+    if (("RD".equals(rawData.getFinBatch())
+            || "AM".equals(rawData.getFinBatch()))
+            && rawData.getAdyRemarks() != null
+            && !rawData.getAdyRemarks().trim().isEmpty()) {
+
+        return Boolean.TRUE;
+    }
+
+    return Boolean.FALSE;
+}
+
+
+private String buildOriginalVatRefId(VatRawData rawData) {
+
+    if (!"MSC".equals(rawData.getStepType())) {
+        return null;
+    }
+
+    if ("AA".equals(rawData.getFinBatch())) {
+
+        return rawData.getDealNo()
+                + rawData.getRefStepId()
+                + rawData.getChargeId();
+    }
+
+    if (List.of("802227", "802226", "800997")
+            .contains(rawData.getChargeId())
+            && ("RD".equals(rawData.getFinBatch())
+            || "AM".equals(rawData.getFinBatch()))
+            && rawData.getAdyRemarks() != null
+            && !rawData.getAdyRemarks().trim().isEmpty()) {
+
+        return rawData.getDealNo()
+                + rawData.getAdyRemarks().trim();
+    }
+
+    return null;
+}
