@@ -1,0 +1,455 @@
+@RestController
+@RequestMapping("/v1/vats")
+@RequiredArgsConstructor
+public class VatController {
+
+    private final VatService vatService;
+
+    @GetMapping
+    public ResponseEntity<List<Vat>> getVatData(
+
+            @RequestParam
+            LocalDate processingDateStart,
+
+            @RequestParam
+            LocalDate processingDateEnd) {
+
+        return ResponseEntity.ok(
+                vatService.getVatData(
+                        processingDateStart,
+                        processingDateEnd));
+    }
+}
+
+
+public interface VatService {
+
+    List<Vat> getVatData(
+            LocalDate processingDateStart,
+            LocalDate processingDateEnd);
+}
+
+
+@Getter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class VatCommand {
+
+    private Integer processingDateStart;
+
+    private Integer processingDateEnd;
+}
+
+public interface VatRepository {
+
+    List<VatRawData> findVatData(
+            VatCommand command);
+}
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class VatRepositoryAdaptor
+        implements VatRepository {
+
+    private final VatJdbcRepository
+            vatJdbcRepository;
+
+    @Override
+    public List<VatRawData> findVatData(
+            VatCommand command) {
+
+        long startTime =
+                System.currentTimeMillis();
+
+        List<VatRawData> result =
+                vatJdbcRepository.findVatData(
+                        command);
+
+        log.info(
+                "VAT Data Query completed in {} ms",
+                System.currentTimeMillis()
+                        - startTime);
+
+        return result;
+    }
+}
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class DefaultVatService implements VatService {
+
+```
+private final VatRepository vatRepository;
+
+@Override
+public List<Vat> getVatData(
+        LocalDate processingDateStart,
+        LocalDate processingDateEnd) {
+
+    long startTime =
+            System.currentTimeMillis();
+
+    VatCommand command =
+            VatCommand.builder()
+                    .processingDateStart(
+                            convertDate(processingDateStart))
+                    .processingDateEnd(
+                            convertDate(processingDateEnd))
+                    .build();
+
+    List<Vat> result =
+            vatRepository.findVatData(command)
+                    .stream()
+                    .map(this::map)
+                    .toList();
+
+    log.info(
+            "Complete VAT Service execution took {} ms",
+            System.currentTimeMillis() - startTime);
+
+    return result;
+}
+
+private Integer convertDate(
+        LocalDate date) {
+
+    if (date == null) {
+        return null;
+    }
+
+    return Integer.parseInt(
+            date.format(
+                    DateTimeFormatter.BASIC_ISO_DATE));
+}
+
+private Vat map(
+        VatRawData raw) {
+
+    if (raw == null) {
+        return null;
+    }
+
+    BigDecimal amountAfterVat =
+            calculateAmountAfterVat(raw);
+
+    BigDecimal convertRate =
+            calculateConvertRate(raw);
+
+    return Vat.builder()
+            .VATREFID(buildVatRefId(raw))
+            .VATGenDate(
+                    raw.getActualRelDate() == null
+                            ? null
+                            : BigDecimal.valueOf(
+                                    raw.getActualRelDate()))
+            .DealId(buildDealId(raw.getDealNo()))
+            .DealTransDate(
+                    raw.getActualRelDate() == null
+                            ? null
+                            : BigDecimal.valueOf(
+                                    raw.getActualRelDate()))
+            .DealAccountingDate(
+                    raw.getActualRelDate() == null
+                            ? null
+                            : BigDecimal.valueOf(
+                                    raw.getActualRelDate()))
+            .REVERSE(buildReverse(raw))
+            .ORIGINALVATREFID(
+                    buildOriginalVatRefId(raw))
+            .VATRate(raw.getVatRate())
+            .OriginalCurrency(buildCurrency(raw))
+            .TotalAmount(raw.getChargeAmt())
+            .TaxAmount(raw.getTaxAmount())
+            .AmountAfterVAT(amountAfterVat)
+            .TargetCurrency("CNY")
+            .ConvertRate(convertRate)
+            .ConvertedTotalAmount(
+                    multiply(
+                            raw.getChargeAmt(),
+                            convertRate))
+            .ConvertedTaxAmount(
+                    multiply(
+                            raw.getTaxAmount(),
+                            convertRate))
+            .ConvertedAmountAfterVAT(
+                    multiply(
+                            amountAfterVat,
+                            convertRate))
+            .RevenueType(
+                    trim(raw.getRevenueType()))
+            .CustomerID(
+                    trim(raw.getCustomerId()))
+            .build();
+}
+
+private String buildVatRefId(
+        VatRawData raw) {
+
+    if (raw.getDealNo() == null
+            || raw.getStepType() == null
+            || raw.getStepNo() == null
+            || raw.getChargeId() == null) {
+        return null;
+    }
+
+    return raw.getDealNo()
+            + raw.getStepType()
+            + raw.getStepNo()
+            + raw.getChargeId();
+}
+
+private String buildDealId(
+        String dealNo) {
+
+    if (dealNo == null
+            || dealNo.length() < 8) {
+        return null;
+    }
+
+    String location;
+
+    String branch =
+            dealNo.substring(2, 5);
+
+    switch (branch) {
+
+        case "860":
+            location = "BEI";
+            break;
+
+        case "870":
+            location = "SHA";
+            break;
+
+        case "880":
+            location = "GUA";
+            break;
+
+        default:
+            location = "UNKNOWN";
+    }
+
+    return dealNo.substring(2, 7)
+            + dealNo.substring(7)
+            + location;
+}
+
+private Boolean buildReverse(
+        VatRawData raw) {
+
+    String stepType =
+            trim(raw.getStepType());
+
+    String finBatch =
+            trim(raw.getFinBatch());
+
+    String remarks =
+            trim(raw.getRemarks());
+
+    if (!"MSC".equals(stepType)) {
+        return Boolean.FALSE;
+    }
+
+    if ("AA".equals(finBatch)) {
+        return Boolean.TRUE;
+    }
+
+    return ("RD".equals(finBatch)
+            || "AM".equals(finBatch))
+            && remarks != null;
+}
+
+private String buildOriginalVatRefId(
+        VatRawData raw) {
+
+    String stepType =
+            trim(raw.getStepType());
+
+    String finBatch =
+            trim(raw.getFinBatch());
+
+    String remarks =
+            trim(raw.getRemarks());
+
+    if (!"MSC".equals(stepType)) {
+        return null;
+    }
+
+    if ("AA".equals(finBatch)) {
+
+        return raw.getDealNo()
+                + raw.getRefStepId()
+                + raw.getChargeId();
+    }
+
+    if (List.of(
+            "802227",
+            "802226",
+            "800997")
+            .contains(raw.getChargeId())
+            && ("RD".equals(finBatch)
+            || "AM".equals(finBatch))
+            && remarks != null) {
+
+        return raw.getDealNo()
+                + remarks;
+    }
+
+    return null;
+}
+
+private String buildCurrency(
+        VatRawData raw) {
+
+    if (raw.getDrCalcCurr() != null
+            && !raw.getDrCalcCurr().isBlank()) {
+
+        return trim(raw.getDrCalcCurr());
+    }
+
+    return trim(raw.getCrCalcCurr());
+}
+
+private BigDecimal calculateAmountAfterVat(
+        VatRawData raw) {
+
+    if (raw.getChargeAmt() == null
+            || raw.getTaxAmount() == null) {
+
+        return null;
+    }
+
+    return raw.getChargeAmt()
+            .subtract(raw.getTaxAmount());
+}
+
+private BigDecimal calculateConvertRate(
+        VatRawData raw) {
+
+    if ("CNY".equals(
+            buildCurrency(raw))) {
+
+        return null;
+    }
+
+    return raw.getExchangeRate();
+}
+
+private BigDecimal multiply(
+        BigDecimal amount,
+        BigDecimal rate) {
+
+    if (amount == null
+            || rate == null) {
+
+        return null;
+    }
+
+    return amount.multiply(rate);
+}
+
+private String trim(
+        String value) {
+
+    return value == null
+            ? null
+            : value.trim();
+}
+
+}
+
+
+@Slf4j
+@Repository
+public class VatJdbcRepository {
+
+```
+private final NamedParameterJdbcTemplate jdbcTemplate;
+
+private final VatRawDataRowMapper vatRawDataRowMapper;
+
+private final SqlFileReader sqlFileReader;
+
+@Value("${IMEX_DB_SCHEMA}")
+private String imexSchema;
+
+@Value("${PETRA_DB_SCHEMA}")
+private String petraSchema;
+
+private String vatQuery;
+
+public VatJdbcRepository(
+
+        @Qualifier("db2NamedParameterJdbcTemplate")
+        NamedParameterJdbcTemplate jdbcTemplate,
+
+        VatRawDataRowMapper vatRawDataRowMapper,
+
+        SqlFileReader sqlFileReader) {
+
+    this.jdbcTemplate = jdbcTemplate;
+    this.vatRawDataRowMapper = vatRawDataRowMapper;
+    this.sqlFileReader = sqlFileReader;
+}
+
+@PostConstruct
+public void loadQueries() {
+
+    this.vatQuery =
+            sqlFileReader.readSql(
+                    "sql/vat/vat-query.sql");
+
+    log.info(
+            "VAT Query loaded successfully");
+}
+
+public List<VatRawData> findVatData(
+        VatCommand command) {
+
+    long startTime =
+            System.currentTimeMillis();
+
+    String query =
+            vatQuery
+                    .replace(
+                            "${IMEX_DB_SCHEMA}",
+                            imexSchema)
+                    .replace(
+                            "${PETRA_DB_SCHEMA}",
+                            petraSchema);
+
+    MapSqlParameterSource params =
+            buildParameters(command);
+
+    List<VatRawData> result =
+            jdbcTemplate.query(
+                    query,
+                    params,
+                    vatRawDataRowMapper);
+
+    log.info(
+            "VAT Query executed in {} ms. Records Returned={}",
+            System.currentTimeMillis()
+                    - startTime,
+            result.size());
+
+    return result;
+}
+
+private MapSqlParameterSource buildParameters(
+        VatCommand command) {
+
+    return new MapSqlParameterSource()
+            .addValue(
+                    "processingDateStart",
+                    command.getProcessingDateStart())
+            .addValue(
+                    "processingDateEnd",
+                    command.getProcessingDateEnd());
+}
+
+}
+
