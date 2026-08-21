@@ -1,0 +1,701 @@
+package com.sg.trade.asia.config;
+
+import lombok.Data;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Data
+@ConfigurationProperties(prefix = "ingestion")
+public class IngestionConfig {
+
+    private List<Ingestion> ingestions = new ArrayList<>();
+
+    @Data
+    public static class Ingestion {
+
+        private String ingestionId;
+
+        private String datasetName;
+    }
+}
+
+package com.sg.trade.asia.config;
+
+import com.sg.trade.asia.ingestion.DefaultIngestionStatusService;
+import com.sg.trade.asia.ingestion.IngestionStatusService;
+import com.sg.trade.asia.ingestion.model.IngestionDefinition;
+import com.sg.trade.asia.ingestion.port.IngestionStatusPort;
+import com.sg.trade.asia.ingestion.port.NotificationPort;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+
+import java.util.List;
+
+@Configuration
+@EnableConfigurationProperties(IngestionConfig.class)
+public class DatalakeFeedingConfig {
+
+    @Bean
+    public IngestionStatusService ingestionStatusService(
+            IngestionStatusPort ingestionStatusPort,
+            NotificationPort notificationPort,
+            IngestionConfig ingestionConfig) {
+
+        List<IngestionDefinition> definitions =
+                ingestionConfig.getIngestions()
+                        .stream()
+                        .map(config ->
+                                new IngestionDefinition(
+                                        config.getIngestionId(),
+                                        config.getDatasetName()))
+                        .toList();
+
+        return new DefaultIngestionStatusService(
+                ingestionStatusPort,
+                notificationPort,
+                definitions);
+    }
+
+    @Bean
+    public TaskScheduler taskScheduler() {
+
+        ThreadPoolTaskScheduler scheduler =
+                new ThreadPoolTaskScheduler();
+
+        scheduler.setPoolSize(5);
+        scheduler.setThreadNamePrefix(
+                "ingestion-replay-");
+
+        scheduler.initialize();
+
+        return scheduler;
+    }
+}
+
+package com.sg.trade.asia.ingestion.model;
+
+public record IngestionDefinition(
+        String ingestionId,
+        String datasetName) {
+}
+
+package com.sg.trade.asia.ingestion.model;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class IngestionStatus {
+
+    private String id;
+
+    private String step;
+
+    private String status;
+
+    private String message;
+
+    private String update;
+
+    private String stage;
+
+    public boolean isSuccessful() {
+        return "SUCCESS".equalsIgnoreCase(status)
+                && "6/6".equals(stage);
+    }
+}
+
+
+package com.sg.trade.asia.ingestion.model;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class IngestionResult {
+
+    private String ingestionId;
+
+    private String datasetName;
+
+    private boolean successful;
+
+    private String message;
+
+    private boolean replayRequired;
+}
+
+
+package com.sg.trade.asia.ingestion.model;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class IngestionFailure {
+
+    private String ingestionId;
+
+    private String message;
+}
+
+package com.sg.trade.asia.ingestion.port;
+
+import com.sg.trade.asia.ingestion.model.IngestionStatus;
+
+import java.time.LocalDate;
+
+public interface IngestionStatusPort {
+
+    IngestionStatus getStatus(
+            String ingestionId,
+            LocalDate date);
+}
+
+package com.sg.trade.asia.ingestion.port;
+
+public interface IngestionReplayPort {
+
+    void replay(String ingestionId);
+}
+
+package com.sg.trade.asia.ingestion.port;
+
+import com.sg.trade.asia.ingestion.model.IngestionFailure;
+
+import java.time.LocalDate;
+import java.util.List;
+
+public interface NotificationPort {
+
+    void sendSuccessNotification(LocalDate date);
+
+    void sendFailureNotification(
+            LocalDate date,
+            List<IngestionFailure> failures);
+}
+
+package com.sg.trade.asia.ingestion;
+
+import com.sg.trade.asia.ingestion.model.IngestionResult;
+
+import java.time.LocalDate;
+import java.util.List;
+
+public interface IngestionStatusService {
+
+    List<IngestionResult> checkStatus(LocalDate date);
+}
+
+package com.sg.trade.asia.ingestion;
+
+import com.sg.trade.asia.ingestion.model.IngestionDefinition;
+import com.sg.trade.asia.ingestion.model.IngestionFailure;
+import com.sg.trade.asia.ingestion.model.IngestionResult;
+import com.sg.trade.asia.ingestion.model.IngestionStatus;
+import com.sg.trade.asia.ingestion.port.IngestionStatusPort;
+import com.sg.trade.asia.ingestion.port.NotificationPort;
+import lombok.RequiredArgsConstructor;
+
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+
+@RequiredArgsConstructor
+public class DefaultIngestionStatusService
+        implements IngestionStatusService {
+
+    private final IngestionStatusPort ingestionStatusPort;
+
+    private final NotificationPort notificationPort;
+
+    private final List<IngestionDefinition> ingestions;
+
+    @Override
+    public List<IngestionResult> checkStatus(
+            LocalDate date) {
+
+        List<IngestionResult> results =
+                new ArrayList<>();
+
+        List<IngestionFailure> failures =
+                new ArrayList<>();
+
+        for (IngestionDefinition ingestion : ingestions) {
+
+            IngestionResult result =
+                    checkIndividualIngestion(
+                            ingestion,
+                            date);
+
+            results.add(result);
+
+            if (!result.isSuccessful()) {
+
+                failures.add(
+                        IngestionFailure.builder()
+                                .ingestionId(
+                                        result.getIngestionId())
+                                .message(
+                                        result.getMessage())
+                                .build()
+                );
+            }
+        }
+
+        sendNotification(date, failures);
+
+        return results;
+    }
+
+    private IngestionResult checkIndividualIngestion(
+            IngestionDefinition ingestion,
+            LocalDate date) {
+
+        IngestionStatus status =
+                ingestionStatusPort.getStatus(
+                        ingestion.ingestionId(),
+                        date);
+
+        if (status.isSuccessful()) {
+
+            return IngestionResult.builder()
+                    .ingestionId(
+                            ingestion.ingestionId())
+                    .datasetName(
+                            ingestion.datasetName())
+                    .successful(true)
+                    .message("")
+                    .replayRequired(false)
+                    .build();
+        }
+
+        String message = status.getMessage();
+
+        if (message == null || message.isBlank()) {
+            message = "Ingestion failed without an error message";
+        }
+
+        return IngestionResult.builder()
+                .ingestionId(
+                        ingestion.ingestionId())
+                .datasetName(
+                        ingestion.datasetName())
+                .successful(false)
+                .message(message)
+                .replayRequired(true)
+                .build();
+    }
+
+    private void sendNotification(
+            LocalDate date,
+            List<IngestionFailure> failures) {
+
+        if (failures.isEmpty()) {
+
+            notificationPort
+                    .sendSuccessNotification(date);
+
+        } else {
+
+            notificationPort
+                    .sendFailureNotification(
+                            date,
+                            failures);
+        }
+    }
+}
+
+
+package com.sg.trade.asia.ingaas;
+
+import com.sg.trade.asia.ingestion.model.IngestionStatus;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+
+@FeignClient(
+        name = "ingaasStatusFeignClient",
+        url = "${ingaas.url}"
+)
+public interface IngaasStatusFeignClient {
+
+    @GetMapping("${ingaas.status-path}")
+    IngestionStatus getStatus(
+            @RequestParam("page") int page,
+            @RequestParam("offset") int offset,
+            @RequestParam("sessionId") String sessionId,
+            @RequestParam("ingestionId") String ingestionId,
+            @RequestParam("date") String date);
+}
+
+package com.sg.trade.asia.ingaas;
+
+import com.sg.trade.asia.ingestion.model.IngestionStatus;
+import com.sg.trade.asia.ingestion.port.IngestionStatusPort;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+
+@Component
+@RequiredArgsConstructor
+public class IngaasStatusAdapter
+        implements IngestionStatusPort {
+
+    private final IngaasStatusFeignClient feignClient;
+
+    @Value("${ingaas.page:0}")
+    private int page;
+
+    @Value("${ingaas.offset:0}")
+    private int offset;
+
+    @Value("${ingaas.session-id}")
+    private String sessionId;
+
+    @Override
+    public IngestionStatus getStatus(
+            String ingestionId,
+            LocalDate date) {
+
+        return feignClient.getStatus(
+                page,
+                offset,
+                sessionId,
+                ingestionId,
+                date.format(
+                        DateTimeFormatter.ISO_LOCAL_DATE));
+    }
+}
+
+package com.sg.trade.asia.ingaas;
+
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+
+@FeignClient(
+        name = "ingaasReplayFeignClient",
+        url = "${ingaas.url}"
+)
+public interface IngaasReplayFeignClient {
+
+    @PostMapping(
+            "${ingaas.replay-path}"
+    )
+    void replay(
+            @PathVariable("ingestionId")
+            String ingestionId);
+}
+
+package com.sg.trade.asia.ingaas;
+
+import com.sg.trade.asia.ingestion.port.IngestionReplayPort;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+@Component
+@RequiredArgsConstructor
+public class IngaasReplayAdapter
+        implements IngestionReplayPort {
+
+    private final IngaasReplayFeignClient feignClient;
+
+    @Override
+    public void replay(String ingestionId) {
+
+        feignClient.replay(ingestionId);
+    }
+}
+
+package com.sg.trade.asia.mail;
+
+import com.sg.trade.asia.ingestion.model.IngestionFailure;
+import com.sg.trade.asia.ingestion.port.NotificationPort;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+
+@Component
+@RequiredArgsConstructor
+public class MailAdapter implements NotificationPort {
+
+    private final JavaMailSender mailSender;
+
+    @Value("${mail.to}")
+    private String mailTo;
+
+    @Value("${mail.from}")
+    private String mailFrom;
+
+    private static final DateTimeFormatter
+            SUBJECT_DATE_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd");
+
+    private static final DateTimeFormatter
+            BODY_DATE_FORMAT =
+            DateTimeFormatter.ofPattern("dd-MMM-yyyy");
+
+    @Override
+    public void sendSuccessNotification(
+            LocalDate date) {
+
+        String formattedDate =
+                date.format(SUBJECT_DATE_FORMAT);
+
+        String bodyDate =
+                date.format(BODY_DATE_FORMAT);
+
+        String subject =
+                "Trade Finance Datalake Ingestion Status - "
+                        + "SUCCESS ["
+                        + formattedDate
+                        + "]";
+
+        String body =
+                """
+                Hi Team,
+
+                All ingestions are successfully loaded for %s.
+
+                Regards,
+                Trade Finance Datalake Feeding Service
+                """.formatted(bodyDate);
+
+        sendMail(subject, body);
+    }
+
+    @Override
+    public void sendFailureNotification(
+            LocalDate date,
+            List<IngestionFailure> failures) {
+
+        String formattedDate =
+                date.format(SUBJECT_DATE_FORMAT);
+
+        String bodyDate =
+                date.format(BODY_DATE_FORMAT);
+
+        String subject =
+                "Trade Finance Datalake Ingestion Status - "
+                        + "FAILED ["
+                        + formattedDate
+                        + "]";
+
+        StringBuilder body =
+                new StringBuilder();
+
+        body.append("Hi Team,\n\n");
+
+        body.append(
+                "The following ingestions failed to load "
+                        + "for "
+                        + bodyDate
+                        + ".\n\n");
+
+        body.append(
+                String.format(
+                        "%-20s | %s%n",
+                        "Ingestion ID",
+                        "Message"));
+
+        body.append(
+                "---------------------"
+                        + "|------------------------------\n");
+
+        for (IngestionFailure failure : failures) {
+
+            body.append(
+                    String.format(
+                            "%-20s | %s%n",
+                            failure.getIngestionId(),
+                            failure.getMessage()));
+        }
+
+        body.append("\n");
+
+        body.append(
+                "The failed ingestions will be "
+                        + "retriggered after approximately "
+                        + "5 minutes.\n\n");
+
+        body.append(
+                "Regards,\n"
+                        + "Trade Finance Datalake Feeding Service");
+
+        sendMail(
+                subject,
+                body.toString());
+    }
+
+    private void sendMail(
+            String subject,
+            String body) {
+
+        SimpleMailMessage message =
+                new SimpleMailMessage();
+
+        message.setFrom(mailFrom);
+        message.setTo(mailTo);
+        message.setSubject(subject);
+        message.setText(body);
+
+        mailSender.send(message);
+    }
+}
+
+package com.sg.trade.asia.scheduler;
+
+import com.sg.trade.asia.ingestion.port.IngestionReplayPort;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.stereotype.Component;
+
+import java.time.Duration;
+
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class IngestionReplayScheduler {
+
+    private final TaskScheduler taskScheduler;
+
+    private final IngestionReplayPort ingestionReplayPort;
+
+    public void scheduleReplay(
+            String ingestionId) {
+
+        log.info(
+                "Scheduling replay for ingestion {} "
+                        + "after 5 minutes",
+                ingestionId);
+
+        taskScheduler.schedule(
+                () -> executeReplay(ingestionId),
+                java.time.Instant.now()
+                        .plus(Duration.ofMinutes(5)));
+    }
+
+    private void executeReplay(
+            String ingestionId) {
+
+        try {
+
+            log.info(
+                    "Starting replay for ingestion {}",
+                    ingestionId);
+
+            ingestionReplayPort.replay(
+                    ingestionId);
+
+            log.info(
+                    "Replay triggered successfully "
+                            + "for ingestion {}",
+                    ingestionId);
+
+        } catch (Exception exception) {
+
+            log.error(
+                    "Replay failed for ingestion {}",
+                    ingestionId,
+                    exception);
+        }
+    }
+}
+
+
+package com.sg.trade.asia.controller;
+
+import com.sg.trade.asia.ingestion.IngestionStatusService;
+import com.sg.trade.asia.ingestion.model.IngestionResult;
+import com.sg.trade.asia.scheduler.IngestionReplayScheduler;
+import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDate;
+import java.util.List;
+
+@RestController
+@RequestMapping
+@RequiredArgsConstructor
+public class IngestionStatusController {
+
+    private final IngestionStatusService ingestionStatusService;
+
+    private final IngestionReplayScheduler replayScheduler;
+
+    @PostMapping("/status")
+    public ResponseEntity<StatusResponse> checkStatus(
+            @RequestParam
+            @DateTimeFormat(
+                    iso = DateTimeFormat.ISO.DATE)
+            LocalDate date) {
+
+        List<IngestionResult> results =
+                ingestionStatusService.checkStatus(date);
+
+        List<IngestionResult> failures =
+                results.stream()
+                        .filter(result ->
+                                !result.isSuccessful())
+                        .toList();
+
+        for (IngestionResult failure : failures) {
+
+            replayScheduler.scheduleReplay(
+                    failure.getIngestionId());
+        }
+
+        if (failures.isEmpty()) {
+
+            return ResponseEntity.ok(
+                    new StatusResponse(
+                            "SUCCESS",
+                            "All ingestions are successfully loaded"));
+        }
+
+        return ResponseEntity.ok(
+                new StatusResponse(
+                        "FAILED",
+                        failures.size()
+                                + " ingestion(s) failed. "
+                                + "Replay scheduled."));
+    }
+
+    public record StatusResponse(
+            String status,
+            String message) {
+    }
+}
