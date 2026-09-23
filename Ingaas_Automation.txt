@@ -1,0 +1,237 @@
+package com.sg.trade.asia.ingestion.status;
+
+import com.sg.trade.asia.ingestion.status.model.IngestionResult;
+import com.sg.trade.asia.ingestion.status.model.IngestionStatus;
+import com.sg.trade.asia.ingestion.status.model.StatusCheckResult;
+import com.sg.trade.asia.ingestion.status.port.IngestionStatusPort;
+
+import java.time.LocalDate;
+import java.util.List;
+
+public class DefaultIngestionStatusService
+        implements IngestionStatusService {
+
+    private final IngestionStatusPort ingestionStatusPort;
+
+    public DefaultIngestionStatusService(
+            IngestionStatusPort ingestionStatusPort) {
+
+        this.ingestionStatusPort =
+                ingestionStatusPort;
+    }
+
+    @Override
+    public StatusCheckResult checkStatus(
+            String ingestionId,
+            LocalDate date) {
+
+        List<IngestionStatus> statuses =
+                ingestionStatusPort.getStatus(
+                        ingestionId,
+                        date);
+
+        if (statuses == null || statuses.isEmpty()) {
+
+            IngestionResult result =
+                    new IngestionResult(
+                            ingestionId,
+                            "UNKNOWN",
+                            List.of(
+                                    "No status information was returned by INGaaS"));
+
+            return new StatusCheckResult(
+                    "FAILED",
+                    "Unable to determine ingestion status",
+                    result);
+        }
+
+        List<IngestionStatus> failedStatuses =
+                statuses.stream()
+                        .filter(status ->
+                                !status.isSuccessful())
+                        .toList();
+
+        if (failedStatuses.isEmpty()) {
+
+            IngestionResult result =
+                    new IngestionResult(
+                            ingestionId,
+                            "SUCCESS",
+                            List.of());
+
+            return new StatusCheckResult(
+                    "SUCCESS",
+                    "Ingestion "
+                            + ingestionId
+                            + " successfully loaded",
+                    result);
+        }
+
+        List<String> failureMessages =
+                failedStatuses.stream()
+                        .map(this::getMessage)
+                        .toList();
+
+        IngestionResult result =
+                new IngestionResult(
+                        ingestionId,
+                        getFailureStatus(failedStatuses),
+                        failureMessages);
+
+        return new StatusCheckResult(
+                "FAILED",
+                "Ingestion "
+                        + ingestionId
+                        + " failed",
+                result);
+    }
+
+    private String getFailureStatus(
+            List<IngestionStatus> failedStatuses) {
+
+        return failedStatuses.get(0).status();
+    }
+
+    private String getMessage(
+            IngestionStatus status) {
+
+        if (status.message() == null
+                || status.message().isBlank()) {
+
+            return "Ingestion step failed without an error message";
+        }
+
+        return status.message();
+    }
+}
+
+
+package com.sg.trade.asia.ingestion.status.ingaas;
+
+import com.sg.trade.asia.ingestion.status.model.IngestionStatus;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+
+import java.util.List;
+
+@FeignClient(
+        name = "ingaasStatusFeignClient",
+        url = "${ingaas.url}"
+)
+public interface IngaasStatusFeignClient {
+
+    @GetMapping("/api/v2/status")
+    List<IngestionStatus> getStatus(
+            @RequestParam("page") int page,
+            @RequestParam("offset") int offset,
+            @RequestParam("ingestionId") String ingestionId,
+            @RequestParam("date") String date);
+}
+
+
+package com.sg.trade.asia.ingestion.status.ingaas;
+
+import com.sg.trade.asia.ingestion.status.model.IngestionStatus;
+import com.sg.trade.asia.ingestion.status.port.IngestionStatusPort;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+
+@Component
+public class IngaasStatusAdapter
+        implements IngestionStatusPort {
+
+    private final IngaasStatusFeignClient feignClient;
+    private final int page;
+    private final int offset;
+
+    public IngaasStatusAdapter(
+            IngaasStatusFeignClient feignClient,
+            @Value("${ingaas.page}") int page,
+            @Value("${ingaas.offset}") int offset) {
+
+        this.feignClient = feignClient;
+        this.page = page;
+        this.offset = offset;
+    }
+
+    @Override
+    public List<IngestionStatus> getStatus(
+            String ingestionId,
+            LocalDate date) {
+
+        String formattedDate =
+                date.format(
+                        DateTimeFormatter.ISO_LOCAL_DATE);
+
+        return feignClient.getStatus(
+                page,
+                offset,
+                ingestionId,
+                formattedDate);
+    }
+}
+
+package com.sg.trade.asia.config;
+
+import com.sg.trade.asia.ingestion.status.DefaultIngestionStatusService;
+import com.sg.trade.asia.ingestion.status.IngestionStatusService;
+import com.sg.trade.asia.ingestion.status.port.IngestionStatusPort;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class IngestionStatusConfiguration {
+
+    @Bean
+    public IngestionStatusService ingestionStatusService(
+            IngestionStatusPort ingestionStatusPort) {
+
+        return new DefaultIngestionStatusService(
+                ingestionStatusPort);
+    }
+}
+
+package com.sg.trade.asia.ingestion.status.controller;
+
+import com.sg.trade.asia.ingestion.status.IngestionStatusService;
+import com.sg.trade.asia.ingestion.status.model.StatusCheckResult;
+import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.time.LocalDate;
+
+@RestController
+@RequestMapping
+@RequiredArgsConstructor
+public class IngestionStatusController {
+
+    private final IngestionStatusService ingestionStatusService;
+
+    @PostMapping("/status")
+    public ResponseEntity<StatusCheckResult> checkStatus(
+            @RequestParam("ingestionId")
+            String ingestionId,
+
+            @RequestParam("date")
+            @DateTimeFormat(
+                    iso = DateTimeFormat.ISO.DATE)
+            LocalDate date) {
+
+        StatusCheckResult result =
+                ingestionStatusService.checkStatus(
+                        ingestionId,
+                        date);
+
+        return ResponseEntity.ok(result);
+    }
+}
