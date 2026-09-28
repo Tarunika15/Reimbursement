@@ -1,0 +1,510 @@
+@Getter
+@Setter
+public class PresignedResponse {
+
+    private String presignedUrl;
+    private String sessionId;
+}
+
+package your.package.domain.port;
+
+import java.time.LocalDate;
+import java.util.Optional;
+
+public interface IngestionSessionPort {
+
+    void register(
+            Long ingestionId,
+            LocalDate ingestionDate,
+            String sessionId);
+
+    Optional<String> getSessionId(
+            Long ingestionId,
+            LocalDate ingestionDate);
+}
+
+
+package your.package.infrastructure.registry;
+
+import your.package.domain.port.IngestionSessionPort;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDate;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Component
+public class IngaasSessionRegistry implements IngestionSessionPort {
+
+    private final Map<SessionKey, String> sessions =
+            new ConcurrentHashMap<>();
+
+    @Override
+    public void register(
+            Long ingestionId,
+            LocalDate ingestionDate,
+            String sessionId) {
+
+        sessions.put(
+                new SessionKey(
+                        ingestionId,
+                        ingestionDate),
+                sessionId);
+    }
+
+    @Override
+    public Optional<String> getSessionId(
+            Long ingestionId,
+            LocalDate ingestionDate) {
+
+        return Optional.ofNullable(
+                sessions.get(
+                        new SessionKey(
+                                ingestionId,
+                                ingestionDate)));
+    }
+
+    private record SessionKey(
+            Long ingestionId,
+            LocalDate ingestionDate) {
+    }
+}
+
+
+PipelineRepositoryAdapter:
+private final IngestionSessionPort ingestionSessionPort;
+private void uploadFile(
+        File file,
+        Long ingestionId) {
+
+    LocalDate ingestionDate = LocalDate.now();
+
+    IngaasUploadRequest partition =
+            IngaasUploadRequest.builder()
+                    .partition(
+                            ingestionDate.format(
+                                    DateTimeFormatter.ofPattern("yyyyMMdd")))
+                    .build();
+
+    PresignedResponse presignedResponse =
+            ingaasFeignClient.getPresignedUrl(
+                    ingestionId,
+                    partition);
+
+    ingestionSessionPort.register(
+            ingestionId,
+            ingestionDate,
+            presignedResponse.getSessionId());
+
+    fileUploadService.upload(
+            presignedResponse.getPresignedUrl(),
+            file);
+}
+
+
+package your.package.domain.port;
+
+public interface IngestionReplayPort {
+
+    void replay(
+            Long ingestionId,
+            String sessionId);
+}
+
+package your.package.infrastructure.client;
+
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+
+@FeignClient(
+        name = "ingaasReplayFeignClient",
+        url = "${ingaas.url}")
+public interface IngaasReplayFeignClient {
+
+    @PostMapping(
+            "/ingestion/pipelines/{ingestionId}/replay")
+    void replay(
+            @PathVariable("ingestionId")
+            Long ingestionId,
+
+            @RequestParam("sessionId")
+            String sessionId);
+}
+
+package your.package.infrastructure.adapter;
+
+import your.package.domain.port.IngestionReplayPort;
+import your.package.infrastructure.client.IngaasReplayFeignClient;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+@Component
+@RequiredArgsConstructor
+public class IngaasReplayAdapter implements IngestionReplayPort {
+
+    private final IngaasReplayFeignClient feignClient;
+
+    @Override
+    public void replay(
+            Long ingestionId,
+            String sessionId) {
+
+        feignClient.replay(
+                ingestionId,
+                sessionId);
+    }
+}
+
+package your.package.domain.port;
+
+import java.time.Duration;
+
+public interface ReplaySchedulerPort {
+
+    void scheduleReplay(
+            Long ingestionId,
+            String sessionId,
+            Duration delay);
+}
+
+package your.package.infrastructure.scheduler;
+
+import your.package.domain.port.IngestionReplayPort;
+import your.package.domain.port.ReplaySchedulerPort;
+import lombok.RequiredArgsConstructor;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.stereotype.Component;
+
+import java.time.Duration;
+import java.time.Instant;
+
+@Component
+@RequiredArgsConstructor
+public class ReplaySchedulerAdapter
+        implements ReplaySchedulerPort {
+
+    private final TaskScheduler taskScheduler;
+
+    private final IngestionReplayPort ingestionReplayPort;
+
+    @Override
+    public void scheduleReplay(
+            Long ingestionId,
+            String sessionId,
+            Duration delay) {
+
+        Instant executionTime =
+                Instant.now().plus(delay);
+
+        taskScheduler.schedule(
+                () -> ingestionReplayPort.replay(
+                        ingestionId,
+                        sessionId),
+                executionTime);
+    }
+}
+
+package your.package.bootstrap.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+
+@Configuration
+public class ReplaySchedulerConfiguration {
+
+    @Bean
+    public ThreadPoolTaskScheduler replayTaskScheduler() {
+
+        ThreadPoolTaskScheduler scheduler =
+                new ThreadPoolTaskScheduler();
+
+        scheduler.setPoolSize(5);
+        scheduler.setThreadNamePrefix(
+                "ingaas-replay-");
+
+        scheduler.initialize();
+
+        return scheduler;
+    }
+}
+
+package your.package.infrastructure.registry;
+
+import your.package.domain.port.ReplaySchedulePort;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDate;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Component
+public class ReplayScheduleRegistry
+        implements ReplaySchedulePort {
+
+    private final Set<ReplayKey> scheduledReplays =
+            ConcurrentHashMap.newKeySet();
+
+    @Override
+    public boolean markIfNotScheduled(
+            Long ingestionId,
+            LocalDate ingestionDate) {
+
+        return scheduledReplays.add(
+                new ReplayKey(
+                        ingestionId,
+                        ingestionDate));
+    }
+
+    private record ReplayKey(
+            Long ingestionId,
+            LocalDate ingestionDate) {
+    }
+}
+
+
+DefaultIngestionStatusService:
+private final IngestionSessionPort ingestionSessionPort;
+private final ReplaySchedulerPort replaySchedulerPort;
+private final ReplayScheduleRegistry replayScheduleRegistry;
+
+
+package your.package.domain.port;
+
+import java.time.LocalDate;
+
+public interface ReplaySchedulePort {
+
+    boolean markIfNotScheduled(
+            Long ingestionId,
+            LocalDate ingestionDate);
+}
+
+
+package your.package.domain.service;
+
+import your.package.domain.model.IngestionDefinition;
+import your.package.domain.model.IngestionResult;
+import your.package.domain.model.IngestionStatus;
+import your.package.domain.model.StatusCheckResult;
+import your.package.domain.port.IngestionSessionPort;
+import your.package.domain.port.IngestionStatusPort;
+import your.package.domain.port.ReplaySchedulePort;
+import your.package.domain.port.ReplaySchedulerPort;
+
+import java.time.Duration;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+public class DefaultIngestionStatusService
+        implements IngestionStatusService {
+
+    private static final Duration REPLAY_DELAY =
+            Duration.ofMinutes(10);
+
+    private final IngestionStatusPort ingestionStatusPort;
+
+    private final IngestionSessionPort ingestionSessionPort;
+
+    private final ReplaySchedulerPort replaySchedulerPort;
+
+    private final ReplaySchedulePort replaySchedulePort;
+
+    private final List<IngestionDefinition> ingestionDefinitions;
+
+    public DefaultIngestionStatusService(
+            IngestionStatusPort ingestionStatusPort,
+            IngestionSessionPort ingestionSessionPort,
+            ReplaySchedulerPort replaySchedulerPort,
+            ReplaySchedulePort replaySchedulePort,
+            List<IngestionDefinition> ingestionDefinitions) {
+
+        this.ingestionStatusPort =
+                ingestionStatusPort;
+
+        this.ingestionSessionPort =
+                ingestionSessionPort;
+
+        this.replaySchedulerPort =
+                replaySchedulerPort;
+
+        this.replaySchedulePort =
+                replaySchedulePort;
+
+        this.ingestionDefinitions =
+                ingestionDefinitions;
+    }
+
+    @Override
+    public StatusCheckResult checkStatus(
+            LocalDate date) {
+
+        List<IngestionResult> results =
+                new ArrayList<>();
+
+        for (IngestionDefinition ingestion :
+                ingestionDefinitions) {
+
+            results.add(
+                    checkIngestion(
+                            ingestion,
+                            date));
+        }
+
+        boolean allSuccessful =
+                results.stream()
+                        .allMatch(result ->
+                                "SUCCESS".equalsIgnoreCase(
+                                        result.status()));
+
+        String overallStatus =
+                allSuccessful
+                        ? "SUCCESS"
+                        : "FAILED";
+
+        String message =
+                allSuccessful
+                        ? "All ingestions are successfully loaded"
+                        : "One or more ingestions failed";
+
+        return new StatusCheckResult(
+                overallStatus,
+                message,
+                results);
+    }
+
+    private IngestionResult checkIngestion(
+            IngestionDefinition ingestion,
+            LocalDate date) {
+
+        List<IngestionStatus> statuses =
+                ingestionStatusPort.getStatus(
+                        ingestion.ingestionId(),
+                        date);
+
+        if (statuses == null ||
+                statuses.isEmpty()) {
+
+            return new IngestionResult(
+                    ingestion.ingestionId(),
+                    ingestion.datasetName(),
+                    "UNKNOWN",
+                    List.of(
+                            "No status information was returned by INGaaS"));
+        }
+
+        List<IngestionStatus> failedStatuses =
+                statuses.stream()
+                        .filter(status ->
+                                !status.isSuccessful())
+                        .toList();
+
+        if (failedStatuses.isEmpty()) {
+
+            return new IngestionResult(
+                    ingestion.ingestionId(),
+                    ingestion.datasetName(),
+                    "SUCCESS",
+                    List.of());
+        }
+
+        scheduleReplayIfRequired(
+                ingestion.ingestionId(),
+                date);
+
+        List<String> messages =
+                failedStatuses.stream()
+                        .map(this::getMessage)
+                        .toList();
+
+        String status =
+                failedStatuses.get(0).status();
+
+        return new IngestionResult(
+                ingestion.ingestionId(),
+                ingestion.datasetName(),
+                status,
+                messages);
+    }
+
+    private void scheduleReplayIfRequired(
+            Long ingestionId,
+            LocalDate date) {
+
+        Optional<String> sessionId =
+                ingestionSessionPort.getSessionId(
+                        ingestionId,
+                        date);
+
+        if (sessionId.isEmpty()) {
+            return;
+        }
+
+        boolean newlyScheduled =
+                replaySchedulePort.markIfNotScheduled(
+                        ingestionId,
+                        date);
+
+        if (!newlyScheduled) {
+            return;
+        }
+
+        replaySchedulerPort.scheduleReplay(
+                ingestionId,
+                sessionId.get(),
+                REPLAY_DELAY);
+    }
+
+    private String getMessage(
+            IngestionStatus status) {
+
+        if (status.message() == null ||
+                status.message().isBlank()) {
+
+            return "Ingestion failed without an error message";
+        }
+
+        return status.message();
+    }
+}
+
+package your.package.bootstrap.config;
+
+import your.package.domain.port.IngestionSessionPort;
+import your.package.domain.port.IngestionStatusPort;
+import your.package.domain.port.ReplaySchedulePort;
+import your.package.domain.port.ReplaySchedulerPort;
+import your.package.domain.service.DefaultIngestionStatusService;
+import your.package.domain.service.IngestionStatusService;
+import your.package.domain.model.IngestionDefinition;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
+
+@Configuration
+public class IngestionStatusConfiguration {
+
+    @Bean
+    public IngestionStatusService ingestionStatusService(
+            IngestionStatusPort ingestionStatusPort,
+            IngestionSessionPort ingestionSessionPort,
+            ReplaySchedulerPort replaySchedulerPort,
+            ReplaySchedulePort replaySchedulePort,
+            List<IngestionDefinition> ingestionDefinitions) {
+
+        return new DefaultIngestionStatusService(
+                ingestionStatusPort,
+                ingestionSessionPort,
+                replaySchedulerPort,
+                replaySchedulePort,
+                ingestionDefinitions);
+    }
+}
+
+
