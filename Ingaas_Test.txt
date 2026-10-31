@@ -1,0 +1,1030 @@
+package com.sg.trade.asia.domain.service;
+
+import com.sg.trade.asia.domain.model.IngestionDefinition;
+import com.sg.trade.asia.domain.model.IngestionResult;
+import com.sg.trade.asia.domain.model.IngestionStatus;
+import com.sg.trade.asia.domain.model.StatusCheckResult;
+import com.sg.trade.asia.domain.port.IngestionStatusPort;
+import com.sg.trade.asia.domain.port.ReplaySchedulerPort;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.Duration;
+import java.time.LocalDate;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class DefaultIngestionStatusServiceTest {
+
+    @Mock
+    private IngestionStatusPort statusPort;
+
+    @Mock
+    private ReplaySchedulerPort schedulerPort;
+
+    private DefaultIngestionStatusService service;
+
+    private final LocalDate processingDate =
+            LocalDate.of(2026, 10, 30);
+
+    private final Long participantsId = 9850L;
+    private final Long additionalFieldsId = 9855L;
+    private final Long partiesId = 10163L;
+
+    private static final String SESSION_1 = "session-101";
+    private static final String SESSION_2 = "session-102";
+    private static final String SESSION_3 = "session-103";
+
+    @BeforeEach
+    void setUp() {
+        List<IngestionDefinition> definitions = List.of(
+                new IngestionDefinition(
+                        participantsId, "Participants"),
+                new IngestionDefinition(
+                        additionalFieldsId, "Additional Fields"),
+                new IngestionDefinition(
+                        partiesId, "Parties")
+        );
+
+        service = new DefaultIngestionStatusService(
+                statusPort,
+                schedulerPort,
+                definitions
+        );
+    }
+
+    @Test
+    void shouldReturnSuccessWhenAllIngestionsAreSuccessful() {
+
+        when(statusPort.getStatus(participantsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_1, "SUCCESS", "Completed")
+                ));
+
+        when(statusPort.getStatus(additionalFieldsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_2, "SUCCESS", "Completed")
+                ));
+
+        when(statusPort.getStatus(partiesId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_3, "SUCCESS", "Completed")
+                ));
+
+        StatusCheckResult result =
+                service.checkStatus(processingDate);
+
+        assertEquals("SUCCESS", result.overallStatus());
+        assertEquals(3, result.ingestions().size());
+
+        assertTrue(result.ingestions().stream()
+                .allMatch(r -> "SUCCESS".equals(r.status())));
+
+        assertTrue(result.ingestions().stream()
+                .noneMatch(IngestionResult::replayScheduled));
+
+        verify(schedulerPort, never())
+                .scheduleReplay(anyLong(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    void shouldScheduleReplayWhenOneIngestionFails() {
+
+        when(statusPort.getStatus(participantsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_1, "SUCCESS", "Completed")
+                ));
+
+        when(statusPort.getStatus(additionalFieldsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_2, "FAILED", "Failed")
+                ));
+
+        when(statusPort.getStatus(partiesId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_3, "SUCCESS", "Completed")
+                ));
+
+        when(schedulerPort.scheduleReplay(
+                additionalFieldsId,
+                SESSION_2,
+                Duration.ofMinutes(10)
+        )).thenReturn(true);
+
+        StatusCheckResult result =
+                service.checkStatus(processingDate);
+
+        assertEquals("FAILED", result.overallStatus());
+
+        IngestionResult failedResult = result.ingestions()
+                .stream()
+                .filter(r -> additionalFieldsId.equals(r.ingestionId()))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals("FAILED", failedResult.status());
+        assertEquals(SESSION_2, failedResult.sessionId());
+        assertTrue(failedResult.replayScheduled());
+
+        verify(schedulerPort, times(1))
+                .scheduleReplay(
+                        additionalFieldsId,
+                        SESSION_2,
+                        Duration.ofMinutes(10)
+                );
+    }
+
+    @Test
+    void shouldScheduleReplayForAllThreeFailedIngestions() {
+
+        when(statusPort.getStatus(anyLong(), eq(processingDate)))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_1, "FAILED", "Failed")
+                ));
+
+        when(schedulerPort.scheduleReplay(
+                anyLong(),
+                anyString(),
+                eq(Duration.ofMinutes(10))
+        )).thenReturn(true);
+
+        StatusCheckResult result =
+                service.checkStatus(processingDate);
+
+        assertEquals("FAILED", result.overallStatus());
+
+        verify(schedulerPort, times(3))
+                .scheduleReplay(
+                        anyLong(),
+                        anyString(),
+                        eq(Duration.ofMinutes(10))
+                );
+    }
+
+    @Test
+    void shouldScheduleSeparateReplayForMultipleFailedSessions() {
+
+        when(statusPort.getStatus(participantsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_1, "FAILED", "Failed 1"),
+                        new IngestionStatus(SESSION_2, "FAILED", "Failed 2")
+                ));
+
+        when(statusPort.getStatus(additionalFieldsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_3, "SUCCESS", "Completed")
+                ));
+
+        when(statusPort.getStatus(partiesId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus("session-104", "SUCCESS", "Completed")
+                ));
+
+        when(schedulerPort.scheduleReplay(
+                anyLong(),
+                anyString(),
+                any(Duration.class)
+        )).thenReturn(true);
+
+        StatusCheckResult result =
+                service.checkStatus(processingDate);
+
+        assertEquals("FAILED", result.overallStatus());
+
+        verify(schedulerPort).scheduleReplay(
+                participantsId,
+                SESSION_1,
+                Duration.ofMinutes(10)
+        );
+
+        verify(schedulerPort).scheduleReplay(
+                participantsId,
+                SESSION_2,
+                Duration.ofMinutes(10)
+        );
+
+        verify(schedulerPort, times(2))
+                .scheduleReplay(
+                        eq(participantsId),
+                        anyString(),
+                        any(Duration.class)
+                );
+    }
+
+    @Test
+    void shouldReturnUnknownWhenStatusResponseIsEmpty() {
+
+        when(statusPort.getStatus(participantsId, processingDate))
+                .thenReturn(List.of());
+
+        when(statusPort.getStatus(additionalFieldsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_2, "SUCCESS", "Completed")
+                ));
+
+        when(statusPort.getStatus(partiesId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_3, "SUCCESS", "Completed")
+                ));
+
+        StatusCheckResult result =
+                service.checkStatus(processingDate);
+
+        IngestionResult unknownResult = result.ingestions().get(0);
+
+        assertEquals("UNKNOWN", unknownResult.status());
+        assertFalse(unknownResult.replayScheduled());
+        assertEquals("FAILED", result.overallStatus());
+
+        verify(schedulerPort, never())
+                .scheduleReplay(anyLong(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    void shouldReturnUnknownWhenStatusApiThrowsException() {
+
+        when(statusPort.getStatus(participantsId, processingDate))
+                .thenThrow(new RuntimeException("INGaaS unavailable"));
+
+        when(statusPort.getStatus(additionalFieldsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_2, "SUCCESS", "Completed")
+                ));
+
+        when(statusPort.getStatus(partiesId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_3, "SUCCESS", "Completed")
+                ));
+
+        StatusCheckResult result =
+                service.checkStatus(processingDate);
+
+        assertEquals("UNKNOWN", result.ingestions().get(0).status());
+        assertEquals("FAILED", result.overallStatus());
+
+        verify(schedulerPort, never())
+                .scheduleReplay(anyLong(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    void shouldNotScheduleReplayWhenSessionIdIsMissing() {
+
+        when(statusPort.getStatus(participantsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(null, "FAILED", "Failed")
+                ));
+
+        when(statusPort.getStatus(additionalFieldsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_2, "SUCCESS", "Completed")
+                ));
+
+        when(statusPort.getStatus(partiesId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_3, "SUCCESS", "Completed")
+                ));
+
+        StatusCheckResult result =
+                service.checkStatus(processingDate);
+
+        assertEquals("FAILED", result.overallStatus());
+        assertFalse(result.ingestions().get(0).replayScheduled());
+
+        verify(schedulerPort, never())
+                .scheduleReplay(anyLong(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    void shouldReturnUnknownWhenStatusIsNull() {
+
+        when(statusPort.getStatus(participantsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_1, null, "No status")
+                ));
+
+        when(statusPort.getStatus(additionalFieldsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_2, "SUCCESS", "Completed")
+                ));
+
+        when(statusPort.getStatus(partiesId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_3, "SUCCESS", "Completed")
+                ));
+
+        when(schedulerPort.scheduleReplay(
+                participantsId,
+                SESSION_1,
+                Duration.ofMinutes(10)
+        )).thenReturn(true);
+
+        StatusCheckResult result =
+                service.checkStatus(processingDate);
+
+        assertEquals("UNKNOWN", result.ingestions().get(0).status());
+        assertEquals("FAILED", result.overallStatus());
+
+        verify(schedulerPort).scheduleReplay(
+                participantsId,
+                SESSION_1,
+                Duration.ofMinutes(10)
+        );
+    }
+
+    @Test
+    void shouldNotReportNewReplayWhenAlreadyScheduled() {
+
+        when(statusPort.getStatus(participantsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_1, "FAILED", "Failed")
+                ));
+
+        when(statusPort.getStatus(additionalFieldsId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_2, "SUCCESS", "Completed")
+                ));
+
+        when(statusPort.getStatus(partiesId, processingDate))
+                .thenReturn(List.of(
+                        new IngestionStatus(SESSION_3, "SUCCESS", "Completed")
+                ));
+
+        when(schedulerPort.scheduleReplay(
+                participantsId,
+                SESSION_1,
+                Duration.ofMinutes(10)
+        )).thenReturn(false);
+
+        StatusCheckResult result =
+                service.checkStatus(processingDate);
+
+        assertFalse(result.ingestions().get(0).replayScheduled());
+
+        verify(schedulerPort, times(1))
+                .scheduleReplay(
+                        participantsId,
+                        SESSION_1,
+                        Duration.ofMinutes(10)
+                );
+    }
+}
+
+
+package com.sg.trade.asia.adapter;
+
+import com.sg.trade.asia.client.IngaasStatusFeignClient;
+import com.sg.trade.asia.domain.model.IngestionStatus;
+import com.sg.trade.asia.dto.IngaasStatusRecord;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.LocalDate;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class IngaasStatusAdapterTest {
+
+    @Mock
+    private IngaasStatusFeignClient feignClient;
+
+    private IngaasStatusAdapter adapter;
+
+    private final Long ingestionId = 9850L;
+
+    private final LocalDate date =
+            LocalDate.of(2026, 10, 30);
+
+    @BeforeEach
+    void setUp() {
+        adapter = new IngaasStatusAdapter(
+                feignClient,
+                1,
+                50
+        );
+    }
+
+    @Test
+    void shouldReturnMappedStatusRecords() {
+
+        IngaasStatusRecord record = new IngaasStatusRecord();
+        record.setId("session-101");
+        record.setStatus("FAILED");
+        record.setMessage("Ingestion failed");
+
+        when(feignClient.getStatus(
+                1,
+                50,
+                ingestionId,
+                "2026-10-30"
+        )).thenReturn(List.of(record));
+
+        List<IngestionStatus> result =
+                adapter.getStatus(ingestionId, date);
+
+        assertEquals(1, result.size());
+        assertEquals("session-101", result.get(0).sessionId());
+        assertEquals("FAILED", result.get(0).status());
+        assertEquals("Ingestion failed", result.get(0).message());
+
+        verify(feignClient).getStatus(
+                1,
+                50,
+                ingestionId,
+                "2026-10-30"
+        );
+    }
+
+    @Test
+    void shouldReturnMultipleStatusRecords() {
+
+        IngaasStatusRecord first = new IngaasStatusRecord();
+        first.setId("session-101");
+        first.setStatus("FAILED");
+        first.setMessage("First failure");
+
+        IngaasStatusRecord second = new IngaasStatusRecord();
+        second.setId("session-102");
+        second.setStatus("FAILED");
+        second.setMessage("Second failure");
+
+        when(feignClient.getStatus(
+                1, 50, ingestionId, "2026-10-30"
+        )).thenReturn(List.of(first, second));
+
+        List<IngestionStatus> result =
+                adapter.getStatus(ingestionId, date);
+
+        assertEquals(2, result.size());
+        assertEquals("session-101", result.get(0).sessionId());
+        assertEquals("session-102", result.get(1).sessionId());
+    }
+
+    @Test
+    void shouldReturnEmptyListWhenFeignResponseIsEmpty() {
+
+        when(feignClient.getStatus(
+                1, 50, ingestionId, "2026-10-30"
+        )).thenReturn(List.of());
+
+        List<IngestionStatus> result =
+                adapter.getStatus(ingestionId, date);
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void shouldReturnEmptyListWhenFeignResponseIsNull() {
+
+        when(feignClient.getStatus(
+                1, 50, ingestionId, "2026-10-30"
+        )).thenReturn(null);
+
+        List<IngestionStatus> result =
+                adapter.getStatus(ingestionId, date);
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void shouldPropagateFeignException() {
+
+        when(feignClient.getStatus(
+                1, 50, ingestionId, "2026-10-30"
+        )).thenThrow(new RuntimeException("INGaaS unavailable"));
+
+        assertThrows(
+                RuntimeException.class,
+                () -> adapter.getStatus(ingestionId, date)
+        );
+    }
+}
+
+
+package com.sg.trade.asia.adapter;
+
+import com.sg.trade.asia.client.IngaasReplayFeignClient;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class IngaasReplayAdapterTest {
+
+    @Mock
+    private IngaasReplayFeignClient replayFeignClient;
+
+    private IngaasReplayAdapter adapter;
+
+    @BeforeEach
+    void setUp() {
+        adapter = new IngaasReplayAdapter(replayFeignClient);
+    }
+
+    @Test
+    void shouldTriggerReplayWithIngestionIdAndSessionId() {
+
+        Long ingestionId = 9850L;
+        String sessionId = "session-101";
+
+        adapter.replay(ingestionId, sessionId);
+
+        verify(replayFeignClient, times(1))
+                .replay(ingestionId, sessionId);
+    }
+
+    @Test
+    void shouldPropagateReplayApiException() {
+
+        Long ingestionId = 9850L;
+        String sessionId = "session-101";
+
+        doThrow(new RuntimeException("Replay API failed"))
+                .when(replayFeignClient)
+                .replay(ingestionId, sessionId);
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                RuntimeException.class,
+                () -> adapter.replay(ingestionId, sessionId)
+        );
+    }
+}
+
+
+package com.sg.trade.asia.scheduler;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class ReplayScheduleRegistryTest {
+
+    private ReplayScheduleRegistry registry;
+
+    @BeforeEach
+    void setUp() {
+        registry = new ReplayScheduleRegistry();
+    }
+
+    @Test
+    void shouldRegisterNewReplay() {
+
+        boolean result = registry.register(
+                9850L,
+                "session-101"
+        );
+
+        assertTrue(result);
+    }
+
+    @Test
+    void shouldPreventDuplicateReplayRegistration() {
+
+        registry.register(9850L, "session-101");
+
+        boolean result = registry.register(
+                9850L,
+                "session-101"
+        );
+
+        assertFalse(result);
+    }
+
+    @Test
+    void shouldAllowDifferentSessionForSameIngestion() {
+
+        assertTrue(registry.register(9850L, "session-101"));
+        assertTrue(registry.register(9850L, "session-102"));
+    }
+
+    @Test
+    void shouldAllowSameSessionForDifferentIngestion() {
+
+        assertTrue(registry.register(9850L, "session-101"));
+        assertTrue(registry.register(9855L, "session-101"));
+    }
+
+    @Test
+    void shouldAllowRegistrationAgainAfterRemoval() {
+
+        registry.register(9850L, "session-101");
+
+        registry.remove(9850L, "session-101");
+
+        assertTrue(registry.register(9850L, "session-101"));
+    }
+}
+
+
+package com.sg.trade.asia.adapter;
+
+import com.sg.trade.asia.domain.port.IngestionReplayPort;
+import com.sg.trade.asia.infrastructure.scheduler.ReplayScheduleRegistry;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.Duration;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class ReplaySchedulerAdapterTest {
+
+    @Mock
+    private ScheduledExecutorService executor;
+
+    @Mock
+    private IngestionReplayPort replayPort;
+
+    @Mock
+    private ScheduledFuture<?> scheduledFuture;
+
+    private ReplayScheduleRegistry registry;
+
+    private ReplaySchedulerAdapter adapter;
+
+    @BeforeEach
+    void setUp() {
+        registry = new ReplayScheduleRegistry();
+
+        adapter = new ReplaySchedulerAdapter(
+                executor,
+                replayPort,
+                registry
+        );
+
+        when(executor.schedule(
+                any(Runnable.class),
+                anyLong(),
+                any(TimeUnit.class)
+        )).thenReturn(scheduledFuture);
+    }
+
+    @Test
+    void shouldScheduleReplaySuccessfully() {
+
+        boolean result = adapter.scheduleReplay(
+                9850L,
+                "session-101",
+                Duration.ofMinutes(10)
+        );
+
+        assertTrue(result);
+
+        verify(executor).schedule(
+                any(Runnable.class),
+                eq(10L),
+                eq(TimeUnit.MINUTES)
+        );
+
+        verifyNoInteractions(replayPort);
+    }
+
+    @Test
+    void shouldExecuteReplayWhenScheduledTaskRuns() {
+
+        adapter.scheduleReplay(
+                9850L,
+                "session-101",
+                Duration.ofMinutes(10)
+        );
+
+        ArgumentCaptor<Runnable> captor =
+                ArgumentCaptor.forClass(Runnable.class);
+
+        verify(executor).schedule(
+                captor.capture(),
+                eq(10L),
+                eq(TimeUnit.MINUTES)
+        );
+
+        // Execute the task immediately in the test.
+        captor.getValue().run();
+
+        verify(replayPort).replay(
+                9850L,
+                "session-101"
+        );
+    }
+
+    @Test
+    void shouldNotScheduleDuplicateReplay() {
+
+        assertTrue(adapter.scheduleReplay(
+                9850L,
+                "session-101",
+                Duration.ofMinutes(10)
+        ));
+
+        boolean secondResult = adapter.scheduleReplay(
+                9850L,
+                "session-101",
+                Duration.ofMinutes(10)
+        );
+
+        assertFalse(secondResult);
+
+        verify(executor, times(1)).schedule(
+                any(Runnable.class),
+                anyLong(),
+                any(TimeUnit.class)
+        );
+    }
+
+    @Test
+    void shouldAllowDifferentSessionsForSameIngestion() {
+
+        assertTrue(adapter.scheduleReplay(
+                9850L,
+                "session-101",
+                Duration.ofMinutes(10)
+        ));
+
+        assertTrue(adapter.scheduleReplay(
+                9850L,
+                "session-102",
+                Duration.ofMinutes(10)
+        ));
+
+        verify(executor, times(2)).schedule(
+                any(Runnable.class),
+                anyLong(),
+                any(TimeUnit.class)
+        );
+    }
+
+    @Test
+    void shouldNotScheduleWhenSessionIdIsNull() {
+
+        boolean result = adapter.scheduleReplay(
+                9850L,
+                null,
+                Duration.ofMinutes(10)
+        );
+
+        assertFalse(result);
+
+        verifyNoInteractions(executor);
+        verifyNoInteractions(replayPort);
+    }
+
+    @Test
+    void shouldNotScheduleWhenSessionIdIsBlank() {
+
+        boolean result = adapter.scheduleReplay(
+                9850L,
+                " ",
+                Duration.ofMinutes(10)
+        );
+
+        assertFalse(result);
+
+        verifyNoInteractions(executor);
+    }
+
+    @Test
+    void shouldRemoveRegistryEntryAfterReplayExecution() {
+
+        adapter.scheduleReplay(
+                9850L,
+                "session-101",
+                Duration.ofMinutes(10)
+        );
+
+        ArgumentCaptor<Runnable> captor =
+                ArgumentCaptor.forClass(Runnable.class);
+
+        verify(executor).schedule(
+                captor.capture(),
+                anyLong(),
+                any(TimeUnit.class)
+        );
+
+        captor.getValue().run();
+
+        // The registry entry should be removed after execution.
+        assertTrue(adapter.scheduleReplay(
+                9850L,
+                "session-101",
+                Duration.ofMinutes(10)
+        ));
+    }
+
+    @Test
+    void shouldRemoveRegistryEntryWhenSchedulingThrowsException() {
+
+        doThrow(new RuntimeException("Scheduler unavailable"))
+                .when(executor)
+                .schedule(
+                        any(Runnable.class),
+                        anyLong(),
+                        any(TimeUnit.class)
+                );
+
+        assertThrows(
+                RuntimeException.class,
+                () -> adapter.scheduleReplay(
+                        9850L,
+                        "session-101",
+                        Duration.ofMinutes(10)
+                )
+        );
+
+        // Registration should be released after scheduling failure.
+        assertTrue(registry.register(9850L, "session-101"));
+    }
+
+    @Test
+    void shouldRemoveRegistryEntryWhenReplayThrowsException() {
+
+        doThrow(new RuntimeException("Replay API unavailable"))
+                .when(replayPort)
+                .replay(9850L, "session-101");
+
+        adapter.scheduleReplay(
+                9850L,
+                "session-101",
+                Duration.ofMinutes(10)
+        );
+
+        ArgumentCaptor<Runnable> captor =
+                ArgumentCaptor.forClass(Runnable.class);
+
+        verify(executor).schedule(
+                captor.capture(),
+                anyLong(),
+                any(TimeUnit.class)
+        );
+
+        // The adapter should clean up the registry even on replay failure.
+        assertDoesNotThrow(() -> captor.getValue().run());
+
+        assertTrue(registry.register(9850L, "session-101"));
+    }
+}
+
+package com.sg.trade.asia.dto;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class IngaasStatusRecordTest {
+
+    private ObjectMapper objectMapper;
+
+    @BeforeEach
+    void setUp() {
+        objectMapper = new ObjectMapper();
+    }
+
+    @Test
+    void shouldDeserializeIngaasStatusResponse() throws Exception {
+
+        String json = """
+                [
+                  {
+                    "id": "08ae4daa-42d9-4e8d-b8ed-708c4f1ee3a5",
+                    "step": "file-watcher",
+                    "status": "FAILED",
+                    "message": "Ingestion failed",
+                    "additionalargs": "test-data",
+                    "update": "2026-10-30 12:01:30",
+                    "stage": "2/6"
+                  }
+                ]
+                """;
+
+        List<IngaasStatusRecord> records =
+                objectMapper.readValue(
+                        json,
+                        new TypeReference<List<IngaasStatusRecord>>() {}
+                );
+
+        assertEquals(1, records.size());
+
+        IngaasStatusRecord record = records.get(0);
+
+        assertEquals(
+                "08ae4daa-42d9-4e8d-b8ed-708c4f1ee3a5",
+                record.getId()
+        );
+
+        assertEquals("file-watcher", record.getStep());
+        assertEquals("FAILED", record.getStatus());
+        assertEquals("Ingestion failed", record.getMessage());
+        assertEquals("2/6", record.getStage());
+    }
+
+    @Test
+    void shouldDeserializeMultipleRecords() throws Exception {
+
+        String json = """
+                [
+                  {
+                    "id": "session-101",
+                    "status": "FAILED",
+                    "message": "First failure"
+                  },
+                  {
+                    "id": "session-102",
+                    "status": "FAILED",
+                    "message": "Second failure"
+                  }
+                ]
+                """;
+
+        List<IngaasStatusRecord> records =
+                objectMapper.readValue(
+                        json,
+                        new TypeReference<List<IngaasStatusRecord>>() {}
+                );
+
+        assertEquals(2, records.size());
+        assertEquals("session-101", records.get(0).getId());
+        assertEquals("session-102", records.get(1).getId());
+    }
+
+    @Test
+    void shouldIgnoreUnknownJsonFields() throws Exception {
+
+        String json = """
+                [
+                  {
+                    "id": "session-101",
+                    "status": "SUCCESS",
+                    "message": "Completed",
+                    "newField": "Additional INGaaS field"
+                  }
+                ]
+                """;
+
+        List<IngaasStatusRecord> records =
+                objectMapper.readValue(
+                        json,
+                        new TypeReference<List<IngaasStatusRecord>>() {}
+                );
+
+        assertEquals(1, records.size());
+        assertEquals("SUCCESS", records.get(0).getStatus());
+    }
+
+    @Test
+    void shouldDeserializeEmptyArray() throws Exception {
+
+        String json = "[]";
+
+        List<IngaasStatusRecord> records =
+                objectMapper.readValue(
+                        json,
+                        new TypeReference<List<IngaasStatusRecord>>() {}
+                );
+
+        assertNotNull(records);
+        assertTrue(records.isEmpty());
+    }
+}
+
