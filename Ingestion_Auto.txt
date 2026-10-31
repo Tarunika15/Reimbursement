@@ -1,0 +1,701 @@
+package com.yourcompany.tfds.domain.model;
+
+public record IngestionStatus(
+        String sessionId,
+        String status,
+        String message
+) {
+}
+
+
+package com.yourcompany.tfds.domain.model;
+
+public record IngestionDefinition(
+        Long ingestionId,
+        String ingestionName
+) {
+}
+
+
+package com.yourcompany.tfds.domain.model;
+
+public record IngestionResult(
+        Long ingestionId,
+        String ingestionName,
+        String status,
+        String message,
+        String sessionId,
+        boolean replayScheduled
+) {
+}
+
+
+package com.yourcompany.tfds.domain.model;
+
+import java.time.LocalDate;
+import java.util.List;
+
+public record StatusCheckResult(
+        LocalDate date,
+        String overallStatus,
+        List<IngestionResult> ingestions
+) {
+}
+
+package com.yourcompany.tfds.domain.port;
+
+import com.yourcompany.tfds.domain.model.IngestionStatus;
+
+import java.time.LocalDate;
+import java.util.List;
+
+public interface IngestionStatusPort {
+
+    List<IngestionStatus> getStatus(
+            Long ingestionId,
+            LocalDate date
+    );
+}
+
+
+package com.yourcompany.tfds.domain.port;
+
+public interface IngestionReplayPort {
+
+    void replay(Long ingestionId, String sessionId);
+}
+
+
+package com.yourcompany.tfds.domain.port;
+
+import java.time.Duration;
+
+public interface ReplaySchedulerPort {
+
+    boolean scheduleReplay(
+            Long ingestionId,
+            String sessionId,
+            Duration delay
+    );
+}
+
+
+package com.yourcompany.tfds.domain.service;
+
+import com.yourcompany.tfds.domain.model.StatusCheckResult;
+
+import java.time.LocalDate;
+
+public interface IngestionStatusService {
+
+    StatusCheckResult checkStatus(LocalDate date);
+}
+
+
+package com.yourcompany.tfds.infrastructure.dto;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+public class IngaasStatusRecord {
+
+    @JsonProperty("id")
+    private String id;
+
+    @JsonProperty("status")
+    private String status;
+
+    @JsonProperty("message")
+    private String message;
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
+    }
+}
+
+
+package com.yourcompany.tfds.infrastructure.dto;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+import java.util.List;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+public class IngaasStatusResponse {
+
+    private List<IngaasStatusRecord> data;
+
+    public List<IngaasStatusRecord> getData() {
+        return data;
+    }
+
+    public void setData(List<IngaasStatusRecord> data) {
+        this.data = data;
+    }
+}
+
+
+package com.yourcompany.tfds.infrastructure.client;
+
+import com.yourcompany.tfds.infrastructure.dto.IngaasStatusResponse;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+
+@FeignClient(
+        name = "ingaaSStatusClient",
+        url = "${ingaas.url}"
+)
+public interface IngaasStatusFeignClient {
+
+    @GetMapping("/api/v2/status")
+    IngaasStatusResponse getStatus(
+            @RequestParam("page") Integer page,
+            @RequestParam("offset") Integer offset,
+            @RequestParam("ingestionId") Long ingestionId,
+            @RequestParam("date") String date
+    );
+}
+
+
+package com.yourcompany.tfds.infrastructure.client;
+
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+
+@FeignClient(
+        name = "ingaaSReplayClient",
+        url = "${ingaas.url}"
+)
+public interface IngaasReplayFeignClient {
+
+    @PostMapping(
+            "/ingestion/pipelines/{ingestionId}/replay"
+    )
+    void replay(
+            @PathVariable("ingestionId") Long ingestionId,
+            @RequestParam("sessionId") String sessionId
+    );
+}
+
+
+package com.yourcompany.tfds.infrastructure.adapter;
+
+import com.yourcompany.tfds.domain.model.IngestionStatus;
+import com.yourcompany.tfds.domain.port.IngestionStatusPort;
+import com.yourcompany.tfds.infrastructure.client.IngaasStatusFeignClient;
+import com.yourcompany.tfds.infrastructure.dto.IngaasStatusRecord;
+import com.yourcompany.tfds.infrastructure.dto.IngaasStatusResponse;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Collections;
+import java.util.List;
+
+@Component
+public class IngaasStatusAdapter implements IngestionStatusPort {
+
+    private static final DateTimeFormatter DATE_FORMAT =
+            DateTimeFormatter.ISO_LOCAL_DATE;
+
+    private final IngaasStatusFeignClient feignClient;
+    private final int page;
+    private final int offset;
+
+    public IngaasStatusAdapter(
+            IngaasStatusFeignClient feignClient,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${ingaas.page:1}") int page,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${ingaas.offset:100}") int offset
+    ) {
+        this.feignClient = feignClient;
+        this.page = page;
+        this.offset = offset;
+    }
+
+    @Override
+    public List<IngestionStatus> getStatus(
+            Long ingestionId,
+            LocalDate date
+    ) {
+        IngaasStatusResponse response = feignClient.getStatus(
+                page,
+                offset,
+                ingestionId,
+                DATE_FORMAT.format(date)
+        );
+
+        if (response == null || response.getData() == null) {
+            return Collections.emptyList();
+        }
+
+        return response.getData()
+                .stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    private IngestionStatus toDomain(IngaasStatusRecord record) {
+        return new IngestionStatus(
+                record.getId(),
+                record.getStatus(),
+                record.getMessage()
+        );
+    }
+}
+
+
+package com.yourcompany.tfds.infrastructure.adapter;
+
+import com.yourcompany.tfds.domain.port.IngestionReplayPort;
+import com.yourcompany.tfds.infrastructure.client.IngaasReplayFeignClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class IngaasReplayAdapter implements IngestionReplayPort {
+
+    private final IngaasReplayFeignClient replayFeignClient;
+
+    public IngaasReplayAdapter(
+            IngaasReplayFeignClient replayFeignClient
+    ) {
+        this.replayFeignClient = replayFeignClient;
+    }
+
+    @Override
+    public void replay(Long ingestionId, String sessionId) {
+        replayFeignClient.replay(ingestionId, sessionId);
+    }
+}
+
+
+package com.yourcompany.tfds.infrastructure.scheduler;
+
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.springframework.stereotype.Component;
+
+@Component
+public class ReplayScheduleRegistry {
+
+    private final Set<String> scheduledReplays =
+            ConcurrentHashMap.newKeySet();
+
+    public boolean register(Long ingestionId, String sessionId) {
+        return scheduledReplays.add(createKey(ingestionId, sessionId));
+    }
+
+    public void remove(Long ingestionId, String sessionId) {
+        scheduledReplays.remove(createKey(ingestionId, sessionId));
+    }
+
+    private String createKey(Long ingestionId, String sessionId) {
+        return ingestionId + ":" + sessionId;
+    }
+}
+
+
+package com.yourcompany.tfds.infrastructure.adapter;
+
+import com.yourcompany.tfds.domain.port.IngestionReplayPort;
+import com.yourcompany.tfds.domain.port.ReplaySchedulerPort;
+import com.yourcompany.tfds.infrastructure.scheduler.ReplayScheduleRegistry;
+
+import org.springframework.stereotype.Component;
+
+import java.time.Duration;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+@Component
+public class ReplaySchedulerAdapter implements ReplaySchedulerPort {
+
+    private final ScheduledExecutorService executor;
+    private final IngestionReplayPort replayPort;
+    private final ReplayScheduleRegistry registry;
+
+    public ReplaySchedulerAdapter(
+            ScheduledExecutorService executor,
+            IngestionReplayPort replayPort,
+            ReplayScheduleRegistry registry
+    ) {
+        this.executor = executor;
+        this.replayPort = replayPort;
+        this.registry = registry;
+    }
+
+    @Override
+    public boolean scheduleReplay(
+            Long ingestionId,
+            String sessionId,
+            Duration delay
+    ) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return false;
+        }
+
+        if (!registry.register(ingestionId, sessionId)) {
+            return false;
+        }
+
+        try {
+            executor.schedule(() -> {
+                try {
+                    replayPort.replay(ingestionId, sessionId);
+                } finally {
+                    registry.remove(ingestionId, sessionId);
+                }
+            }, delay.toMillis(), TimeUnit.MILLISECONDS);
+
+            return true;
+        } catch (RuntimeException exception) {
+            registry.remove(ingestionId, sessionId);
+            throw exception;
+        }
+    }
+}
+
+
+package com.yourcompany.tfds.domain.service;
+
+import com.yourcompany.tfds.domain.model.IngestionDefinition;
+import com.yourcompany.tfds.domain.model.IngestionResult;
+import com.yourcompany.tfds.domain.model.IngestionStatus;
+import com.yourcompany.tfds.domain.model.StatusCheckResult;
+import com.yourcompany.tfds.domain.port.IngestionStatusPort;
+import com.yourcompany.tfds.domain.port.ReplaySchedulerPort;
+
+import java.time.Duration;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+
+public class DefaultIngestionStatusService
+        implements IngestionStatusService {
+
+    private static final Duration REPLAY_DELAY =
+            Duration.ofMinutes(10);
+
+    private static final String SUCCESS = "SUCCESS";
+    private static final String FAILED = "FAILED";
+    private static final String UNKNOWN = "UNKNOWN";
+
+    private final IngestionStatusPort statusPort;
+    private final ReplaySchedulerPort schedulerPort;
+    private final List<IngestionDefinition> ingestionDefinitions;
+
+    public DefaultIngestionStatusService(
+            IngestionStatusPort statusPort,
+            ReplaySchedulerPort schedulerPort,
+            List<IngestionDefinition> ingestionDefinitions
+    ) {
+        this.statusPort = statusPort;
+        this.schedulerPort = schedulerPort;
+        this.ingestionDefinitions = List.copyOf(ingestionDefinitions);
+    }
+
+    @Override
+    public StatusCheckResult checkStatus(LocalDate date) {
+
+        List<IngestionResult> results = new ArrayList<>();
+
+        for (IngestionDefinition definition : ingestionDefinitions) {
+            checkIngestion(definition, date, results);
+        }
+
+        boolean allSuccessful = !results.isEmpty()
+                && results.stream().allMatch(
+                        result -> SUCCESS.equalsIgnoreCase(result.status())
+                );
+
+        String overallStatus = allSuccessful ? SUCCESS : FAILED;
+
+        return new StatusCheckResult(
+                date,
+                overallStatus,
+                List.copyOf(results)
+        );
+    }
+
+    private void checkIngestion(
+            IngestionDefinition definition,
+            LocalDate date,
+            List<IngestionResult> results
+    ) {
+        List<IngestionStatus> statuses;
+
+        try {
+            statuses = statusPort.getStatus(
+                    definition.ingestionId(),
+                    date
+            );
+        } catch (RuntimeException exception) {
+            results.add(new IngestionResult(
+                    definition.ingestionId(),
+                    definition.ingestionName(),
+                    UNKNOWN,
+                    "Unable to retrieve INGaaS status: "
+                            + exception.getMessage(),
+                    null,
+                    false
+            ));
+            return;
+        }
+
+        if (statuses == null || statuses.isEmpty()) {
+            results.add(new IngestionResult(
+                    definition.ingestionId(),
+                    definition.ingestionName(),
+                    UNKNOWN,
+                    "No status records returned by INGaaS.",
+                    null,
+                    false
+            ));
+            return;
+        }
+
+        for (IngestionStatus status : statuses) {
+            evaluateStatus(definition, status, results);
+        }
+    }
+
+    private void evaluateStatus(
+            IngestionDefinition definition,
+            IngestionStatus status,
+            List<IngestionResult> results
+    ) {
+        String sessionId = status.sessionId();
+        String ingestionStatus = status.status();
+
+        if (SUCCESS.equalsIgnoreCase(ingestionStatus)) {
+            results.add(new IngestionResult(
+                    definition.ingestionId(),
+                    definition.ingestionName(),
+                    SUCCESS,
+                    status.message(),
+                    sessionId,
+                    false
+            ));
+            return;
+        }
+
+        String failureStatus =
+                ingestionStatus == null || ingestionStatus.isBlank()
+                        ? UNKNOWN
+                        : FAILED;
+
+        boolean replayScheduled = false;
+        String message = status.message();
+
+        if (sessionId != null && !sessionId.isBlank()) {
+            replayScheduled = schedulerPort.scheduleReplay(
+                    definition.ingestionId(),
+                    sessionId,
+                    REPLAY_DELAY
+            );
+
+            if (replayScheduled) {
+                message = appendMessage(
+                        message,
+                        "Replay scheduled after 10 minutes."
+                );
+            } else {
+                message = appendMessage(
+                        message,
+                        "Replay was not newly scheduled. "
+                                + "It may already be pending."
+                );
+            }
+        } else {
+            message = appendMessage(
+                    message,
+                    "Replay not scheduled because session ID is missing."
+            );
+        }
+
+        results.add(new IngestionResult(
+                definition.ingestionId(),
+                definition.ingestionName(),
+                failureStatus,
+                message,
+                sessionId,
+                replayScheduled
+        ));
+    }
+
+    private String appendMessage(String original, String additional) {
+        if (original == null || original.isBlank()) {
+            return additional;
+        }
+
+        return original + " " + additional;
+    }
+}
+
+
+package com.yourcompany.tfds.bootstrap;
+
+import com.yourcompany.tfds.domain.model.IngestionDefinition;
+import com.yourcompany.tfds.domain.port.IngestionStatusPort;
+import com.yourcompany.tfds.domain.port.ReplaySchedulerPort;
+import com.yourcompany.tfds.domain.service.DefaultIngestionStatusService;
+import com.yourcompany.tfds.domain.service.IngestionStatusService;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
+
+@Configuration
+public class IngestionStatusConfiguration {
+
+    @Bean
+    public List<IngestionDefinition> ingestionDefinitions(
+            @Value("${ingaas.ingestion.participants-id}")
+            Long participantsId,
+
+            @Value("${ingaas.ingestion.additional-fields-id}")
+            Long additionalFieldsId,
+
+            @Value("${ingaas.ingestion.parties-id}")
+            Long partiesId
+    ) {
+        return List.of(
+                new IngestionDefinition(
+                        participantsId,
+                        "Participants"
+                ),
+                new IngestionDefinition(
+                        additionalFieldsId,
+                        "Additional Fields"
+                ),
+                new IngestionDefinition(
+                        partiesId,
+                        "Parties"
+                )
+        );
+    }
+
+    @Bean
+    public IngestionStatusService ingestionStatusService(
+            IngestionStatusPort statusPort,
+            ReplaySchedulerPort schedulerPort,
+            List<IngestionDefinition> ingestionDefinitions
+    ) {
+        return new DefaultIngestionStatusService(
+                statusPort,
+                schedulerPort,
+                ingestionDefinitions
+        );
+    }
+}
+
+
+package com.yourcompany.tfds.bootstrap;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+
+@Configuration
+public class ReplaySchedulerConfiguration {
+
+    @Bean(destroyMethod = "shutdown")
+    public ScheduledExecutorService replayExecutor() {
+        return Executors.newScheduledThreadPool(3);
+    }
+}
+
+
+Replace the ingestionDefinitions() method in IngestionStatusConfiguration.java with these three methods:
+@Bean
+public IngestionDefinition participantsDefinition(
+        @Value("${ingaas.ingestion.participants-id}") Long id
+) {
+    return new IngestionDefinition(id, "Participants");
+}
+
+@Bean
+public IngestionDefinition additionalFieldsDefinition(
+        @Value("${ingaas.ingestion.additional-fields-id}") Long id
+) {
+    return new IngestionDefinition(id, "Additional Fields");
+}
+
+@Bean
+public IngestionDefinition partiesDefinition(
+        @Value("${ingaas.ingestion.parties-id}") Long id
+) {
+    return new IngestionDefinition(id, "Parties");
+}
+
+
+package com.yourcompany.tfds.infrastructure.controller;
+
+import com.yourcompany.tfds.domain.model.StatusCheckResult;
+import com.yourcompany.tfds.domain.service.IngestionStatusService;
+
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.time.LocalDate;
+
+@RestController
+@RequestMapping
+public class IngestionStatusController {
+
+    private final IngestionStatusService ingestionStatusService;
+
+    public IngestionStatusController(
+            IngestionStatusService ingestionStatusService
+    ) {
+        this.ingestionStatusService = ingestionStatusService;
+    }
+
+    @GetMapping("/status")
+    public ResponseEntity<StatusCheckResult> checkStatus(
+            @RequestParam("date")
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate date
+    ) {
+        StatusCheckResult result =
+                ingestionStatusService.checkStatus(date);
+
+        return ResponseEntity.ok(result);
+    }
+}
+
+
