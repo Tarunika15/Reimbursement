@@ -1,0 +1,493 @@
+package com.sg.trade.asia.domain.model;
+
+public record StatusUpdateRequest(
+        Integer projectId,
+        String path,
+        String date,
+        String optionName,
+        String status,
+        String reason
+) {
+}
+
+package com.sg.trade.asia.domain.port;
+
+import com.sg.trade.asia.domain.model.StatusUpdateRequest;
+
+public interface StatusUpdatePort {
+
+    void updateStatus(StatusUpdateRequest request);
+}
+
+package com.sg.trade.asia.domain.port;
+
+import java.time.LocalDate;
+
+public interface FollowUpSchedulerPort {
+
+    void scheduleFollowUp(
+            Long ingestionId,
+            String sessionId,
+            LocalDate processingDate
+    );
+}
+
+package com.sg.trade.asia.domain.port;
+
+import java.time.LocalDate;
+
+public interface ReplaySchedulerPort {
+
+    void scheduleReplay(
+            Long ingestionId,
+            String sessionId,
+            LocalDate processingDate
+    );
+}
+
+package com.sg.trade.asia.domain.service;
+
+import com.sg.trade.asia.domain.model.IngestionStatus;
+import com.sg.trade.asia.domain.model.StatusUpdateRequest;
+import com.sg.trade.asia.domain.port.IngestionStatusPort;
+import com.sg.trade.asia.domain.port.StatusUpdatePort;
+
+import java.time.Clock;
+import java.time.LocalDate;
+import java.util.List;
+
+public class ReplayFollowUpService {
+
+    private final IngestionStatusPort ingestionStatusPort;
+    private final StatusUpdatePort statusUpdatePort;
+
+    private final Integer projectId;
+    private final String path;
+    private final String optionName;
+    private final Clock clock;
+
+    public ReplayFollowUpService(
+            IngestionStatusPort ingestionStatusPort,
+            StatusUpdatePort statusUpdatePort,
+            Integer projectId,
+            String path,
+            String optionName,
+            Clock clock
+    ) {
+        this.ingestionStatusPort = ingestionStatusPort;
+        this.statusUpdatePort = statusUpdatePort;
+        this.projectId = projectId;
+        this.path = path;
+        this.optionName = optionName;
+        this.clock = clock;
+    }
+
+    public void execute(
+            Long ingestionId,
+            String sessionId,
+            LocalDate processingDate
+    ) {
+
+        String status = "KO";
+        String reason;
+
+        try {
+            List<IngestionStatus> records =
+                    ingestionStatusPort.getStatus(
+                            ingestionId,
+                            processingDate
+                    );
+
+            IngestionStatus matchingRecord = records == null
+                    ? null
+                    : records.stream()
+                        .filter(record ->
+                                sessionId.equals(record.sessionId()))
+                        .findFirst()
+                        .orElse(null);
+
+            if (matchingRecord == null) {
+                reason = "No matching INGaaS status record found for sessionId: "
+                        + sessionId;
+            } else if ("SUCCESS".equalsIgnoreCase(
+                    matchingRecord.status())) {
+
+                status = "OK";
+                reason = null;
+
+            } else {
+                reason = matchingRecord.message() == null
+                        || matchingRecord.message().isBlank()
+                        ? "INGaaS returned status: "
+                            + matchingRecord.status()
+                        : matchingRecord.message();
+            }
+
+        } catch (Exception exception) {
+            reason = "Follow-up status check failed: "
+                    + exception.getMessage();
+        }
+
+        StatusUpdateRequest request = new StatusUpdateRequest(
+                projectId,
+                path,
+                LocalDate.now(clock).toString(),
+                optionName,
+                status,
+                reason
+        );
+
+        statusUpdatePort.updateStatus(request);
+    }
+}
+
+package com.sg.trade.asia.infrastructure.client;
+
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+
+@FeignClient(
+        name = "ingaasStatusUpdateClient",
+        url = "${ingaas.status-update.url}"
+)
+public interface IngaasStatusUpdateFeignClient {
+
+    @PutMapping
+    void updateStatus(
+            @RequestParam("projectId") Integer projectId,
+            @RequestParam("path") String path,
+            @RequestParam("date") String date,
+            @RequestParam("optionName") String optionName,
+            @RequestParam("status") String status,
+            @RequestParam(value = "reason", required = false) String reason
+    );
+}
+
+package com.sg.trade.asia.infrastructure.adapter;
+
+import com.sg.trade.asia.domain.model.StatusUpdateRequest;
+import com.sg.trade.asia.domain.port.StatusUpdatePort;
+import com.sg.trade.asia.infrastructure.client.IngaasStatusUpdateFeignClient;
+
+public class IngaasStatusUpdateAdapter implements StatusUpdatePort {
+
+    private final IngaasStatusUpdateFeignClient feignClient;
+
+    public IngaasStatusUpdateAdapter(
+            IngaasStatusUpdateFeignClient feignClient
+    ) {
+        this.feignClient = feignClient;
+    }
+
+    @Override
+    public void updateStatus(StatusUpdateRequest request) {
+
+        feignClient.updateStatus(
+                request.projectId(),
+                request.path(),
+                request.date(),
+                request.optionName(),
+                request.status(),
+                request.reason()
+        );
+    }
+}
+
+package com.sg.trade.asia.infrastructure.scheduler;
+
+import com.sg.trade.asia.domain.port.FollowUpSchedulerPort;
+import com.sg.trade.asia.domain.service.ReplayFollowUpService;
+
+import java.time.LocalDate;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+public class FollowUpSchedulerAdapter
+        implements FollowUpSchedulerPort {
+
+    private final ScheduledExecutorService executorService;
+    private final ReplayFollowUpService followUpService;
+    private final long delayMinutes;
+
+    public FollowUpSchedulerAdapter(
+            ScheduledExecutorService executorService,
+            ReplayFollowUpService followUpService,
+            long delayMinutes
+    ) {
+        this.executorService = executorService;
+        this.followUpService = followUpService;
+        this.delayMinutes = delayMinutes;
+    }
+
+    @Override
+    public void scheduleFollowUp(
+            Long ingestionId,
+            String sessionId,
+            LocalDate processingDate
+    ) {
+
+        executorService.schedule(
+                () -> followUpService.execute(
+                        ingestionId,
+                        sessionId,
+                        processingDate
+                ),
+                delayMinutes,
+                TimeUnit.MINUTES
+        );
+    }
+}
+
+Extend the existing replay scheduler
+private final FollowUpSchedulerPort followUpSchedulerPort;
+private void executeReplay(
+        Long ingestionId,
+        String sessionId,
+        LocalDate processingDate
+) {
+    try {
+        // Existing replay API call.
+        replayPort.replay(ingestionId, sessionId);
+
+        // Only reached when the replay API call succeeds.
+        followUpSchedulerPort.scheduleFollowUp(
+                ingestionId,
+                sessionId,
+                processingDate
+        );
+
+    } finally {
+        replayScheduleRegistry.remove(ingestionId, sessionId);
+    }
+}
+
+
+package com.sg.trade.asia.bootstrap.configuration;
+
+import com.sg.trade.asia.domain.port.IngestionStatusPort;
+import com.sg.trade.asia.domain.port.StatusUpdatePort;
+import com.sg.trade.asia.domain.service.ReplayFollowUpService;
+import com.sg.trade.asia.infrastructure.adapter.IngaasStatusUpdateAdapter;
+import com.sg.trade.asia.infrastructure.client.IngaasStatusUpdateFeignClient;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.time.Clock;
+
+@Configuration
+public class StatusUpdateConfiguration {
+
+    @Bean
+    public Clock systemClock() {
+        return Clock.systemDefaultZone();
+    }
+
+    @Bean
+    public StatusUpdatePort statusUpdatePort(
+            IngaasStatusUpdateFeignClient feignClient
+    ) {
+        return new IngaasStatusUpdateAdapter(feignClient);
+    }
+
+    @Bean
+    public ReplayFollowUpService replayFollowUpService(
+            IngestionStatusPort ingestionStatusPort,
+            StatusUpdatePort statusUpdatePort,
+            @Value("${ingaas.status-update.project-id}")
+            Integer projectId,
+            @Value("${ingaas.status-update.path}")
+            String path,
+            @Value("${ingaas.status-update.option-name}")
+            String optionName,
+            Clock systemClock
+    ) {
+        return new ReplayFollowUpService(
+                ingestionStatusPort,
+                statusUpdatePort,
+                projectId,
+                path,
+                optionName,
+                systemClock
+        );
+    }
+}
+
+package com.sg.trade.asia.bootstrap.configuration;
+
+import com.sg.trade.asia.domain.port.FollowUpSchedulerPort;
+import com.sg.trade.asia.domain.service.ReplayFollowUpService;
+import com.sg.trade.asia.infrastructure.scheduler.FollowUpSchedulerAdapter;
+
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.concurrent.ScheduledExecutorService;
+
+@Configuration
+public class FollowUpSchedulerConfiguration {
+
+    @Bean
+    public FollowUpSchedulerPort followUpSchedulerPort(
+            @Qualifier("followUpScheduledExecutor")
+            ScheduledExecutorService executorService,
+            ReplayFollowUpService followUpService,
+            @Value("${ingaas.follow-up.delay-minutes:45}")
+            long delayMinutes
+    ) {
+        return new FollowUpSchedulerAdapter(
+                executorService,
+                followUpService,
+                delayMinutes
+        );
+    }
+}
+
+@Bean(name = "followUpScheduledExecutor", destroyMethod = "shutdown")
+public ScheduledExecutorService followUpScheduledExecutor() {
+    return Executors.newScheduledThreadPool(3);
+}
+
+public interface FollowUpSchedulerPort {
+
+    void scheduleFollowUp(
+            Long ingestionId,
+            String sessionId,
+            LocalDate date
+    );
+}
+
+package com.sg.trade.asia.infrastructure.scheduler;
+
+import com.sg.trade.asia.domain.port.IngestionReplayPort;
+import com.sg.trade.asia.domain.port.ReplaySchedulerPort;
+import com.sg.trade.asia.domain.port.FollowUpSchedulerPort;
+
+import java.time.Duration;
+import java.time.LocalDate;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import org.springframework.stereotype.Component;
+
+@Component
+public class ReplaySchedulerAdapter implements ReplaySchedulerPort {
+
+    private final ScheduledExecutorService executor;
+    private final IngestionReplayPort replayPort;
+    private final ReplayScheduleRegistry registry;
+    private final FollowUpSchedulerPort followUpSchedulerPort;
+
+    public ReplaySchedulerAdapter(
+            ScheduledExecutorService executor,
+            IngestionReplayPort replayPort,
+            ReplayScheduleRegistry registry,
+            FollowUpSchedulerPort followUpSchedulerPort
+    ) {
+        this.executor = executor;
+        this.replayPort = replayPort;
+        this.registry = registry;
+        this.followUpSchedulerPort = followUpSchedulerPort;
+    }
+
+    @Override
+    public boolean scheduleReplay(
+            Long ingestionId,
+            String sessionId,
+            LocalDate date,
+            Duration delay
+    ) {
+
+        if (sessionId == null || sessionId.isBlank()) {
+            return false;
+        }
+
+        if (!registry.register(ingestionId, sessionId)) {
+            return false;
+        }
+
+        try {
+            executor.schedule(() -> {
+                try {
+                    // Step 1: Execute the existing replay API.
+                    replayPort.replay(ingestionId, sessionId);
+
+                    // Step 2: Schedule follow-up only if replay succeeds.
+                    // The 45-minute timer starts here.
+                    followUpSchedulerPort.scheduleFollowUp(
+                            ingestionId,
+                            sessionId,
+                            date
+                    );
+
+                } finally {
+                    // Preserve your existing duplicate-scheduling cleanup.
+                    registry.remove(ingestionId, sessionId);
+                }
+
+            }, delay.toMillis(), TimeUnit.MILLISECONDS);
+
+            return true;
+
+        } catch (RuntimeException exception) {
+            registry.remove(ingestionId, sessionId);
+            throw exception;
+        }
+    }
+}
+
+
+package com.sg.trade.asia.infrastructure.scheduler;
+
+import com.sg.trade.asia.domain.port.FollowUpSchedulerPort;
+import com.sg.trade.asia.domain.service.ReplayFollowUpService;
+
+import java.time.LocalDate;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+@Component
+public class FollowUpSchedulerAdapter implements FollowUpSchedulerPort {
+
+    private final ScheduledExecutorService executor;
+    private final ReplayFollowUpService followUpService;
+    private final long delayMinutes;
+
+    public FollowUpSchedulerAdapter(
+            ScheduledExecutorService executor,
+            ReplayFollowUpService followUpService,
+            @Value("${ingaas.follow-up.delay-minutes:45}")
+            long delayMinutes
+    ) {
+        this.executor = executor;
+        this.followUpService = followUpService;
+        this.delayMinutes = delayMinutes;
+    }
+
+    @Override
+    public void scheduleFollowUp(
+            Long ingestionId,
+            String sessionId,
+            LocalDate date
+    ) {
+        executor.schedule(
+                () -> followUpService.execute(
+                        ingestionId,
+                        sessionId,
+                        date
+                ),
+                delayMinutes,
+                TimeUnit.MINUTES
+        );
+    }
+}
+
+
+
